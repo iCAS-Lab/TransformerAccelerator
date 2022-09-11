@@ -15,7 +15,6 @@ import TransformerQuantization
 import IMDB_Dataset
 from tensorboard import main as tb
 import threading
-import plotUtils
 import os
 #os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
@@ -32,8 +31,8 @@ t.start()
 max_features = 10000
 sequence_length = 250
 embedding_dim = 16
-d_model = 256
-num_heads = 8
+d_model = 128
+num_heads = 2
 #strategy = tf.distribute.MirroredStrategy()#devices=["/gpu:0", "/gpu:1", "/gpu:2"])
 strategy = tf.distribute.get_strategy()
 BATCH_SIZE_PER_REPLICA = 16
@@ -42,10 +41,11 @@ BATCH_SIZE = BATCH_SIZE_PER_REPLICA * strategy.num_replicas_in_sync
 def fetchRawModel(batch_size=None):
   with strategy.scope():
     x = tf.keras.Input(shape=(sequence_length,), batch_size=batch_size, dtype=tf.float32, name="encoder_input", ragged=False)
-    embedding = tf.keras.layers.Embedding(max_features+1, embedding_dim, input_length=sequence_length)(x)
+    embedding = tf.keras.layers.Embedding(max_features+1, d_model, input_length=sequence_length)(x)
     #identity = embedding
     identity = TransformerModel.LinearLayer()(embedding)
-    out1 = TransformerModel.ScaledConvolutionalDotProduct(d_model)(identity,identity,identity,None)
+    #out1 = TransformerModel.ScaledDotProduct(d_model, int(d_model/num_heads))(identity,identity,identity,None)
+    out1 = TransformerModel.BERTMultiHeadedAttention(num_heads, d_model)(identity,identity,identity,None)
     flat1 = tf.keras.layers.Flatten()(out1)
     output_layer =  tf.keras.layers.Dense(1, name='output_layer')(flat1)
     model = tf.keras.Model(inputs=[x], outputs=[output_layer], name="transformer")
@@ -117,8 +117,8 @@ converter = tf.lite.TFLiteConverter.from_keras_model(quant_aware_model)
 converter.optimizations = [tf.lite.Optimize.DEFAULT]
 converter.representative_dataset = representative_dataset
 converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-converter.inference_input_type = tf.int8  # or tf.uint8
-converter.inference_output_type = tf.int8  # or tf.uint8
+#converter.inference_input_type = tf.int8  # or tf.uint8
+#converter.inference_output_type = tf.int8  # or tf.uint8
 #quantized_tflite_model = converter.convert()
 suspected_layers = ["embedding", "encoder_input"]
 """
@@ -141,7 +141,8 @@ with open(quant_file, 'wb') as f:
 print("Float model in Mb:", floatSize)
 print("Quantized model in Mb:", os.path.getsize(quant_file) / float(2**20))
 
-open("models/dense_network.tflite", "wb").write(quantized_tflite_model)
+open("tflite_models/imdb_test_vehicle_int8.tflite", "wb").write(quantized_tflite_model)
+open("tflite_models/imdb_test_vehicle_fp32.tflite", "wb").write(float_tflite_model)
 
 print("Done")
 #"""

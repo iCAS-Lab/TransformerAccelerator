@@ -97,7 +97,7 @@ class MultiHeadedAttentionQuantizeConfig(tfmot.quantization.keras.QuantizeConfig
     # Configure how to quantize weights.
     def get_weights_and_quantizers(self, layer):
         retVals = []
-        sdp_quant_config = ScaledConvolutionalDotProductQuantizeConfig()
+        sdp_quant_config = ScaledDotProductQuantizeConfig()
         for head in layer.attention_heads:
             retVals += sdp_quant_config.get_weights_and_quantizers(head)
         return [
@@ -106,18 +106,17 @@ class MultiHeadedAttentionQuantizeConfig(tfmot.quantization.keras.QuantizeConfig
 
     # Configure how to quantize activations.
     def get_activations_and_quantizers(self, layer):
-        sdp_quant_config = ScaledConvolutionalDotProductQuantizeConfig()
+        sdp_quant_config = ScaledDotProductQuantizeConfig()
         retVals = []
         for head in layer.attention_heads:
                 retVals += sdp_quant_config.get_activations_and_quantizers(head)
-        return [
-            (layer.relu, MovingAverageQuantizer(num_bits=ACTIVATION_BITS, symmetric=False, narrow_range=False, per_axis=False)),] + retVals
+        return [] + retVals
 
     def set_quantize_weights(self, layer, quantize_weights):
       # Add this line for each item returned in `get_weights_and_quantizers`
       # , in the same order
         layer.kernel = quantize_weights[0]
-        sdp_quant_config = ScaledConvolutionalDotProductQuantizeConfig()
+        sdp_quant_config = ScaledDotProductQuantizeConfig()
         offset = 1
         for head in layer.attention_heads:
             lookAhead = len(sdp_quant_config.get_weights_and_quantizers(head))
@@ -127,9 +126,8 @@ class MultiHeadedAttentionQuantizeConfig(tfmot.quantization.keras.QuantizeConfig
     def set_quantize_activations(self, layer, quantize_activations):
         # Add this line for each item returned in `get_activations_and_quantizers`
         # , in the same order.
-        layer.relu = quantize_activations[0]
-        sdp_quant_config = ScaledConvolutionalDotProductQuantizeConfig()
-        offset = 1
+        sdp_quant_config = ScaledDotProductQuantizeConfig()
+        offset = 0
         for head in layer.attention_heads:
             lookAhead = len(sdp_quant_config.get_activations_and_quantizers(head))
             sdp_quant_config.set_quantize_activations(head, quantize_activations[offset:offset+lookAhead])
@@ -210,7 +208,7 @@ def apply_quantization_to_custom(layer):
     return tfmot.quantization.keras.quantize_annotate_layer(layer, ScaledDotProductQuantizeConfig())
   if isinstance(layer, TransformerModel.ScaledConvolutionalDotProduct):
     return tfmot.quantization.keras.quantize_annotate_layer(layer, ScaledConvolutionalDotProductQuantizeConfig())
-  if isinstance(layer, TransformerModel.MultiHeadedAttention) or isinstance(layer, TransformerModel.TPUAcceleratedMultiHeadedAttention):
+  if isinstance(layer, TransformerModel.MultiHeadedAttention) or isinstance(layer, TransformerModel.TPUAcceleratedMultiHeadedAttention) or isinstance(layer, TransformerModel.BERTMultiHeadedAttention):
     return tfmot.quantization.keras.quantize_annotate_layer(layer, MultiHeadedAttentionQuantizeConfig())
   if isinstance(layer, tf.keras.layers.Embedding) or isinstance(layer, TransformerModel.QuantizedEmbedding):
     return layer
@@ -232,6 +230,8 @@ def QuantizeTransformer(model):
         'TPUAcceleratedMultiHeadedAttention':TransformerModel.TPUAcceleratedMultiHeadedAttention,
         'MultiHeadedAttentionQuantizeConfig':MultiHeadedAttentionQuantizeConfig,
         'ScaledDotProduct':TransformerModel.ScaledDotProduct,
-        'ScaledDotProductQuantizeConfig':ScaledDotProductQuantizeConfig}):
+        'ScaledDotProductQuantizeConfig':ScaledDotProductQuantizeConfig,
+        'BERTMultiHeadedAttention':TransformerModel.BERTMultiHeadedAttention}
+        ):
         quant_aware_model = tfmot.quantization.keras.quantize_apply(annotated_model)
     return quant_aware_model

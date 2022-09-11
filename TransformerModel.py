@@ -264,7 +264,7 @@ class ScaledDotProduct(tf.keras.layers.Layer):
         return {'d_model': self.d_model, 'name':self.name, 'activation':self.activation, 'inp_size':self.inp_size}
 
 
-    def call(self, q, k, v, mask):
+    def call(self, q, k, v, mask=None):
         q = tf.matmul(q, self.kernel_q) + self.bias_q
         k = tf.matmul(k, self.kernel_k) + self.bias_k
         v = tf.matmul(v, self.kernel_v) + self.bias_v
@@ -272,8 +272,8 @@ class ScaledDotProduct(tf.keras.layers.Layer):
         matmul_qk = tf.matmul(q, k, transpose_b=True)
         dk = tf.cast(tf.shape(k)[-1], tf.float32)
         scaled_attention_logits = matmul_qk / tf.math.sqrt(dk)
-
-        scaled_attention_logits += mask
+        if not mask is None:
+            scaled_attention_logits += mask
         attention_weights = self.softmax(scaled_attention_logits, axis=-1)
         output = tf.matmul(attention_weights, v)
         return  output
