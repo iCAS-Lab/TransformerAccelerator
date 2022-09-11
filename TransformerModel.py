@@ -1,3 +1,10 @@
+#
+# Author: Brendan Reidy
+# Email: bcreidy@email.sc.edu
+# Date created: May 5 2020
+# Last Modified: Sep 11 2022
+#
+
 import tensorflow as tf
 import sys
 import numpy as np

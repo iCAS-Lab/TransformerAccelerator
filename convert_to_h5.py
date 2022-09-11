@@ -1,3 +1,10 @@
+#
+# Author: Brendan Reidy
+# Email: bcreidy@email.sc.edu
+# Date created: Sep 10 2022
+# Last Modified: Sep 11 2022
+#
+
 import os
 
 import sys

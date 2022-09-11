@@ -1,3 +1,10 @@
+#
+# Author(s): Brendan Reidy
+# Email: bcreidy@email.sc.edu
+# Date created: Sep 3 2022
+# Last Modified: Sep 11 2022
+#
+
 import tensorflow_model_optimization as tfmot
 import tensorflow as tf
 import TransformerModel

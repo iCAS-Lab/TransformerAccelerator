@@ -1,3 +1,10 @@
+#
+# Author: Brendan Reidy
+# Email: bcreidy@email.sc.edu
+# Date created: Sep 11 2022
+# Last Modified: Sep 11 2022
+#
+
 import tensorflow as tf
 import json
 import TransformerModel
