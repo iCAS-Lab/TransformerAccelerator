@@ -98,9 +98,13 @@ bert_classifier.compile(
 
 bert_classifier.evaluate(glue_validation)
 out_name = model_name
-if out_name[:-1]=="/":
+print(model_name)
+if out_name[-1]=="/":
     out_name = out_name[:len(out_name)-1]
-bert_classifier.save(model_name + ".h5")
+bert_classifier.save(out_name + ".h5")
+print("Successfully converted model to tf\n")
+print("Model saved to " + out_name + ".h5")
+"""
 bert_classifier.fit(
       glue_train,
       validation_data=(glue_validation),

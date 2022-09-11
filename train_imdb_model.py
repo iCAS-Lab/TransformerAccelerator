@@ -45,26 +45,7 @@ def fetchRawModel(batch_size=None):
     embedding = tf.keras.layers.Embedding(max_features+1, embedding_dim, input_length=sequence_length)(x)
     #identity = embedding
     identity = TransformerModel.LinearLayer()(embedding)
-    #"""
-    out1 = tf.keras.layers.Flatten()(identity)
-    out1 =  tf.keras.layers.Dense(d_model, activation='relu')(identity)
-    out1 =  tf.keras.layers.Dense(d_model, activation='relu')(out1)
-    out1 =  tf.keras.layers.Dense(d_model, activation='relu')(out1)
-    out1 =  tf.keras.layers.Dense(d_model, activation='relu')(out1)
-    out1 =  tf.keras.layers.Dense(d_model, activation='relu')(out1)
-    out1 =  tf.keras.layers.Dense(d_model, activation='relu')(out1)
-    out1 =  tf.keras.layers.Dense(d_model, activation='relu')(out1)
-    """
-    out1 = TransformerModel.TPUAcceleratedMultiHeadedAttention(num_heads, d_model)(identity,identity,identity,None)
-    out1 = tf.keras.layers.Dropout(0.1)(out1)
-    out2 = TransformerModel.TPUAcceleratedMultiHeadedAttention(num_heads, d_model)(out1,out1,out1,None)
-    out2 = tf.keras.layers.Dropout(0.1)(out2)
-    out2 = tf.keras.layers.Add()([out2,out1])
-    out3 = TransformerModel.TPUAcceleratedMultiHeadedAttention(num_heads, d_model)(out2,out2,out2,None)
-    out3 = tf.keras.layers.Add()([out3,out1])
-    out3 = tf.keras.layers.Dropout(0.1)(out3)
-    #"""
-    #out1 = TransformerModel.ScaledConvolutionalDotProduct(d_model)(identity,identity,identity,None)
+    out1 = TransformerModel.ScaledConvolutionalDotProduct(d_model)(identity,identity,identity,None)
     flat1 = tf.keras.layers.Flatten()(out1)
     output_layer =  tf.keras.layers.Dense(1, name='output_layer')(flat1)
     model = tf.keras.Model(inputs=[x], outputs=[output_layer], name="transformer")
