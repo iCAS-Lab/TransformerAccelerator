@@ -16,6 +16,7 @@ import IMDB_Dataset
 from tensorboard import main as tb
 import threading
 import os
+import MaskUtils
 #os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
 tensorBoardPath = "/home/brendan/tpu_transformer/tensorboard/"
@@ -31,6 +32,7 @@ t.start()
 max_features = 10000
 sequence_length = 250
 embedding_dim = 16
+intermediate_size = 64
 d_model = 128
 num_heads = 2
 #strategy = tf.distribute.MirroredStrategy()#devices=["/gpu:0", "/gpu:1", "/gpu:2"])
@@ -45,7 +47,8 @@ def fetchRawModel(batch_size=None):
     #identity = embedding
     identity = TransformerModel.LinearLayer()(embedding)
     #out1 = TransformerModel.ScaledDotProduct(d_model, int(d_model/num_heads))(identity,identity,identity,None)
-    out1 = TransformerModel.BERTMultiHeadedAttention(num_heads, d_model)(identity,identity,identity,None)
+    #out1 = TransformerModel.BERTMultiHeadedAttention(num_heads, d_model)(identity,identity,identity,None)
+    out1 = TransformerModel.BertEncoder(num_heads, d_model, intermediate_size, activation='relu')(identity, None)
     flat1 = tf.keras.layers.Flatten()(out1)
     output_layer =  tf.keras.layers.Dense(1, name='output_layer')(flat1)
     model = tf.keras.Model(inputs=[x], outputs=[output_layer], name="transformer")

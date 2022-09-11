@@ -528,7 +528,7 @@ class BertEncoder(tf.keras.layers.Layer):
         #x = tf.squeeze(x)
         attn_output = self.mha(x, x, x, mask)
         attn_output = self.dropout1(attn_output, training=training)
-        out1 = self.layernorm1(x + attn_output)
+        out1 = self.layernorm1(x + attn_output) # (batch_Size, seq_len, d_model)
         ffn_output1 = self.activation1(tf.matmul(out1, self.kernel_dff) + self.bias_dff)
         ffn_output2 = tf.matmul(ffn_output1, self.kernel_out) + self.bias_out
         ffn_output3 = self.dropout2(ffn_output2, training=training)

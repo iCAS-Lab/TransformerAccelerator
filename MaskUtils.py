@@ -7,7 +7,10 @@ def create_padding_mask(seq):
 def create_look_ahead_mask(size):
   mask = 1 - tf.linalg.band_part(tf.ones((size, size)), -1, 0)
   return mask
-
+def pad_mask(x):
+  mask = tf.where(tf.equal(x,0), tf.ones_like(x)*-1e9, tf.zeros_like(x))
+  mask = tf.expand_dims(mask, axis=1)
+  return mask
 
 def create_masks(inp, tar):
   # Encoder padding mask

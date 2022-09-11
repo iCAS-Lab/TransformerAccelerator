@@ -1,0 +1,16 @@
+# ignore ALL .log files
+*.log
+*.h5
+*.ipynb
+*.zip
+*.tflite
+# ignore ALL files in ANY directory named temp
+models/
+~/
+__pycache__/
+IMDB_Dataset.py
+train_imdb_model.py
+evaluate_imdb_model.py
+data/
+aclImdb/
+tflite_models/

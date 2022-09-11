@@ -172,36 +172,77 @@ class NoQuantizationConfig(tfmot.quantization.keras.QuantizeConfig):
     def get_config(self):
       return {}
 
+class BERTEncoderQunatizationConfig(tfmot.quantization.keras.QuantizeConfig):
+  def get_weights_and_quantizers(self, layer):
+    retVals = []
+
+    mha_quant_config = MultiHeadedAttentionQuantizeConfig()
+    retVals = mha_quant_config.get_weights_and_quantizers(layer.mha)
+    return [
+            (layer.kernel_dff, LastValueQuantizer(num_bits=WEIGHT_BITS, symmetric=True, narrow_range=False, per_axis=False)),
+            (layer.kernel_out, LastValueQuantizer(num_bits=WEIGHT_BITS, symmetric=True, narrow_range=False, per_axis=False)),
+            (layer.layernorm1.gamma, LastValueQuantizer(num_bits=WEIGHT_BITS, symmetric=True, narrow_range=False, per_axis=False)),
+            (layer.layernorm1.beta, LastValueQuantizer(num_bits=WEIGHT_BITS, symmetric=True, narrow_range=False, per_axis=False))
+            ] + retVals
+    
+
+  # Configure how to quantize activations.
+  def get_activations_and_quantizers(self, layer):
+    return [
+        (layer.activation1, MovingAverageQuantizer(num_bits=ACTIVATION_BITS, symmetric=False, narrow_range=False, per_axis=False))
+        ]
+
+  def set_quantize_weights(self, layer, quantize_weights):
+    # Add this line for each item returned in `get_weights_and_quantizers`
+    # , in the same order
+    layer.kernel_dff = quantize_weights[0]
+    layer.kernel_out = quantize_weights[1]
+    layer.layernorm1.gamma = quantize_weights[2]
+    layer.layernorm1.beta = quantize_weights[3]
+    mha_quant_config = MultiHeadedAttentionQuantizeConfig()
+    offset = 4
+    mha_quant_config.set_quantize_weights(layer.mha, quantize_weights[offset:])
+
+  def set_quantize_activations(self, layer, quantize_activations):
+    layer.activation1 = quantize_activations[0]
+
+  # Configure how to quantize outputs (may be equivalent to activations).
+  def get_output_quantizers(self, layer):
+    return []
+
+  def get_config(self):
+    return {}
+
 class OutputQuantizationConfig(tfmot.quantization.keras.QuantizeConfig):
-    # Configure how to quantize weights.
-    def get_weights_and_quantizers(self, layer):
-      return []
-      #return [(layer.embeddings, LastValueQuantizer(num_bits=WEIGHT_BITS, symmetric=True, narrow_range=False, per_axis=False))]
+  # Configure how to quantize weights.
+  def get_weights_and_quantizers(self, layer):
+    return []
+    #return [(layer.embeddings, LastValueQuantizer(num_bits=WEIGHT_BITS, symmetric=True, narrow_range=False, per_axis=False))]
 
-    # Configure how to quantize activations.
-    def get_activations_and_quantizers(self, layer):
-      return []
-      #return [(layer.relu, MovingAverageQuantizer(num_bits=ACTIVATION_BITS, symmetric=False, narrow_range=False, per_axis=False))]
+  # Configure how to quantize activations.
+  def get_activations_and_quantizers(self, layer):
+    return []
+    #return [(layer.relu, MovingAverageQuantizer(num_bits=ACTIVATION_BITS, symmetric=False, narrow_range=False, per_axis=False))]
 
-    def set_quantize_weights(self, layer, quantize_weights):
-      # Add this line for each item returned in `get_weights_and_quantizers`
-      # , in the same order
-      #layer.embeddings = quantize_weights[0]
-      pass
+  def set_quantize_weights(self, layer, quantize_weights):
+    # Add this line for each item returned in `get_weights_and_quantizers`
+    # , in the same order
+    #layer.embeddings = quantize_weights[0]
+    pass
 
-    def set_quantize_activations(self, layer, quantize_activations):
-      # Add this line for each item returned in `get_activations_and_quantizers`
-      # , in the same order.
-      #layer.relu = quantize_activations[0]
-      pass
-      
+  def set_quantize_activations(self, layer, quantize_activations):
+    # Add this line for each item returned in `get_activations_and_quantizers`
+    # , in the same order.
+    #layer.relu = quantize_activations[0]
+    pass
+    
 
-    # Configure how to quantize outputs (may be equivalent to activations).
-    def get_output_quantizers(self, layer):
-      return [MovingAverageQuantizer(num_bits=ACTIVATION_BITS, symmetric=False, narrow_range=False, per_axis=False)]
+  # Configure how to quantize outputs (may be equivalent to activations).
+  def get_output_quantizers(self, layer):
+    return [MovingAverageQuantizer(num_bits=ACTIVATION_BITS, symmetric=False, narrow_range=False, per_axis=False)]
 
-    def get_config(self):
-      return {}
+  def get_config(self):
+    return {}
 
 def apply_quantization_to_custom(layer):
   if isinstance(layer, TransformerModel.ScaledDotProduct):
@@ -210,12 +251,13 @@ def apply_quantization_to_custom(layer):
     return tfmot.quantization.keras.quantize_annotate_layer(layer, ScaledConvolutionalDotProductQuantizeConfig())
   if isinstance(layer, TransformerModel.MultiHeadedAttention) or isinstance(layer, TransformerModel.TPUAcceleratedMultiHeadedAttention) or isinstance(layer, TransformerModel.BERTMultiHeadedAttention):
     return tfmot.quantization.keras.quantize_annotate_layer(layer, MultiHeadedAttentionQuantizeConfig())
+  if isinstance(layer, TransformerModel.BertEncoder):
+    return tfmot.quantization.keras.quantize_annotate_layer(layer, BERTEncoderQunatizationConfig())
   if isinstance(layer, tf.keras.layers.Embedding) or isinstance(layer, TransformerModel.QuantizedEmbedding):
     return layer
   if isinstance(layer, TransformerModel.LinearLayer):
     return tfmot.quantization.keras.quantize_annotate_layer(layer, OutputQuantizationConfig())
   return tfmot.quantization.keras.quantize_annotate_layer(layer)
-
 
 def QuantizeTransformer(model):
     annotated_model = tf.keras.models.clone_model(model, clone_function=apply_quantization_to_custom)
@@ -231,7 +273,10 @@ def QuantizeTransformer(model):
         'MultiHeadedAttentionQuantizeConfig':MultiHeadedAttentionQuantizeConfig,
         'ScaledDotProduct':TransformerModel.ScaledDotProduct,
         'ScaledDotProductQuantizeConfig':ScaledDotProductQuantizeConfig,
-        'BERTMultiHeadedAttention':TransformerModel.BERTMultiHeadedAttention}
+        'BERTMultiHeadedAttention':TransformerModel.BERTMultiHeadedAttention,
+        'BertEncoder':TransformerModel.BertEncoder,
+        'BERTEncoderQunatizationConfig':BERTEncoderQunatizationConfig
+        }
         ):
         quant_aware_model = tfmot.quantization.keras.quantize_apply(annotated_model)
     return quant_aware_model
