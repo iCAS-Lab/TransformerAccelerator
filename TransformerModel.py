@@ -442,6 +442,7 @@ class BERT(tf.keras.layers.Layer):
 
         self.activation = activation
         self.act_out = activations.get(activation)
+        print("ACTACT", self.activation)
 
     def get_config(self):
         return {
@@ -494,7 +495,6 @@ class BertEncoder(tf.keras.layers.Layer):
         self.activation = activation
 
         self.activation1 = activations.get(activation)
-        self.activation2 = activations.get(activation)
 
     def get_config(self):
         return {
@@ -507,8 +507,6 @@ class BertEncoder(tf.keras.layers.Layer):
             }
 
     def build(self, input_shape):
-
-        #self.mha.build(input_shape)
 
         self.kernel_dff = self.add_weight(self.name + "/intermediate/kernel",shape=[self.d_model,self.intermediate_size],
                 initializer='random_normal',
@@ -582,7 +580,6 @@ class EncoderLayer(tf.keras.layers.Layer):
                 trainable=True)
 
     def call(self, x, mask, training=True):
-        #x = tf.squeeze(x)
         attn_output = self.mha(x, x, x, mask)
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(x + attn_output)
