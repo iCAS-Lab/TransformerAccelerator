@@ -27,11 +27,17 @@ def relu(x):
 erf_a = -0.2888
 erf_b = -1.769
 erf_c = 1
+
+#abs function is not supported on edge tpu
+def tf_abs(x):
+    return tf_sign(x)*x
+
+#sign function is not supported in tflite
 def tf_sign(x):
-    return tf.where(x > 0, tf.ones_like(x), -tf.ones_like(x))
+    return tf.tanh(x*1e9)
 
 def approx_erf(x):
-    return tf_sign(x) * (erf_a * (tf.math.minimum(tf.math.abs(x), -erf_b)+erf_b)**2 + erf_c)
+    return x*(erf_a * (tf.math.minimum(tf_abs(x), -erf_b)+erf_b)**2 + erf_c)
 
 def approx_gelu(x):
     return x*0.5*(1+approx_erf(x/math.sqrt(2)))
@@ -514,6 +520,9 @@ class BertEncoder(tf.keras.layers.Layer):
         self.activation = activation
 
         self.activation1 = activations.get(activation)
+        if activation == 'gelu':
+            self.activation1 = approx_gelu
+
 
     def get_config(self):
         return {
