@@ -26,7 +26,7 @@ ExampleConfig.json
 ```
 {
     "hidden_size": 128,
-    "hidden_act": "relu",
+    "hidden_act": "gelu",
     "initializer_range": 0.02,
     "vocab_size": 30522,
     "hidden_dropout_prob": 0.1,
