@@ -21,7 +21,7 @@ model_dir = "uncased_L-2_H-128_A-2"
 bert_encoder = ConvertModel.from_tf1_checkpoint(model_dir) # Tensorflow BERT models were trained using TF1
 ```
 
-### Createing model from config.json
+### Creating model from config.json
 ExampleConfig.json
 ```
 {
