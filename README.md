@@ -1,6 +1,6 @@
 # Quantization Aware Training for BERT models
 
-## Private repo do not share (for now)
+## Private repo do not share outside of lab (for now)
 
 ## Getting Started
 
