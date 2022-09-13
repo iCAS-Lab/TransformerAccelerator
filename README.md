@@ -4,7 +4,7 @@
 
 Build BERT Transformer model from config or using pretrained [Tensorflow models](https://github.com/google-research/bert)
 <p align="center">
-  <img src="figures/BERT_Architecture.png" />
+  <img src="figures/BERT_Architecture.png" width=100/>
 </p>
 ## Example
 ### Downloading model
