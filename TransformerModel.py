@@ -24,6 +24,19 @@ def relu(x):
     y = tf.constant([0.])
     return tf.math.maximum(x, y)
 
+erf_a = -0.2888
+erf_b = -1.769
+erf_c = 1
+def tf_sign(x):
+    return tf.where(x > 0, tf.ones_like(x), -tf.ones_like(x))
+
+def approx_erf(x):
+    return tf_sign(x) * (erf_a * (tf.math.minimum(tf.math.abs(x), -erf_b)+erf_b)**2 + erf_c)
+
+def approx_gelu(x):
+    return x*0.5*(1+approx_erf(x/math.sqrt(2)))
+
+
 def get_angles(pos, i, d_model):
     angle_rates = 1 / np.power(10000, (2 * (i//2)) / np.float32(d_model))
     return pos * angle_rates
@@ -325,6 +338,8 @@ class MultiHeadedAttention(tf.keras.layers.Layer):
         self.num_heads = num_heads
         self.activation = activation
         self.act_out = activations.get(activation)
+        if activation == 'gelu':
+            self.act_out = approx_gelu
         self.d_model = d_model
 
     def build(self, input_shape):
@@ -401,7 +416,7 @@ class BertEmbedding(tf.keras.layers.Layer):
         self.word_embeddings = tf.keras.layers.Embedding(vocab_size, d_model, name="word_embeddings")
         self.position_embedding = tf.keras.layers.Embedding(seq_len, d_model, name="position_embeddings")
         self.type_embeddings = tf.keras.layers.Embedding(n_segments, d_model, name="type_embeddings")
-        self.norm = IntLayerNorm(epsilon=1e-12, name="layer_normalization")
+        self.norm = tf.keras.layers.LayerNormalization(epsilon=1e-12, name="layer_normalization")
 
     def get_config(self):
         return {
@@ -442,6 +457,8 @@ class BERT(tf.keras.layers.Layer):
 
         self.activation = activation
         self.act_out = activations.get(activation)
+        if activation == 'gelu':
+            self.act_out = approx_gelu
 
     def get_config(self):
         return {
@@ -486,8 +503,11 @@ class BertEncoder(tf.keras.layers.Layer):
 
         self.mha = BERTMultiHeadedAttention(num_heads, d_model, activation=activation, name = "mha")
 
-        self.layernorm1 = IntLayerNorm(epsilon=1e-12, name="attention_layer_norm")
-        self.layernorm2 = IntLayerNorm(epsilon=1e-12, name="output_layer_norm")
+        self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-12, name="attention_layer_norm")
+        self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-12, name="output_layer_norm")
+
+        #self.layernorm1 = IntLayerNorm(epsilon=1e-12, name="attention_layer_norm")
+        #self.layernorm2 = IntLayerNorm(epsilon=1e-12, name="output_layer_norm")
         
         self.dropout1 = tf.keras.layers.Dropout(rate)
         self.dropout2 = tf.keras.layers.Dropout(rate)
@@ -565,11 +585,6 @@ class IntLayerNorm(tf.keras.layers.Layer):
                 trainable=True)
 
     def call(self, x):
-        if not self.quantized:
-            mean, var = tf.nn.moments(x, -1, keepdims=True)
-            y = x - mean
-            x = y / tf.sqrt(self.epsilon + var)
-            x = x * self.weight + self.bias
         mean, var = tf.nn.moments(x, -1, keepdims=True)
         y = x - mean
         x = tf.math.floor(y / tf.sqrt(self.epsilon + var))

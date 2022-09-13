@@ -38,7 +38,6 @@ def from_config(configPath):
     mask = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_mask", ragged=False)
     custom_encoder = TransformerModel.BERT(n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, activation=activation, name="transformer")(x, seg)
     encoder_model = tf.keras.Model(inputs=[x, seg, mask], outputs=[custom_encoder])
-    encoder_model.compile()
     return encoder_model
 
 def from_hub_encoder(hub_encoder, configPath, strategy=None):
