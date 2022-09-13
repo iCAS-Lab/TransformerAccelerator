@@ -401,7 +401,7 @@ class BertEmbedding(tf.keras.layers.Layer):
         self.word_embeddings = tf.keras.layers.Embedding(vocab_size, d_model, name="word_embeddings")
         self.position_embedding = tf.keras.layers.Embedding(seq_len, d_model, name="position_embeddings")
         self.type_embeddings = tf.keras.layers.Embedding(n_segments, d_model, name="type_embeddings")
-        self.norm = tf.keras.layers.LayerNormalization(epsilon=1e-12)
+        self.norm = IntLayerNorm(epsilon=1e-12, name="layer_normalization")
 
     def get_config(self):
         return {
@@ -442,7 +442,6 @@ class BERT(tf.keras.layers.Layer):
 
         self.activation = activation
         self.act_out = activations.get(activation)
-        print("ACTACT", self.activation)
 
     def get_config(self):
         return {
@@ -487,8 +486,8 @@ class BertEncoder(tf.keras.layers.Layer):
 
         self.mha = BERTMultiHeadedAttention(num_heads, d_model, activation=activation, name = "mha")
 
-        self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-12, name="attention_layer_norm")
-        self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-12, name="output_layer_norm")
+        self.layernorm1 = IntLayerNorm(epsilon=1e-12, name="attention_layer_norm")
+        self.layernorm2 = IntLayerNorm(epsilon=1e-12, name="output_layer_norm")
         
         self.dropout1 = tf.keras.layers.Dropout(rate)
         self.dropout2 = tf.keras.layers.Dropout(rate)
@@ -533,7 +532,50 @@ class BertEncoder(tf.keras.layers.Layer):
         out2 = self.layernorm2(out1 + ffn_output3)
         return out2
 
+class IntLayerNorm(tf.keras.layers.Layer):
+    """
+    Tensorflow implmentation of integer-only layer norm
+    https://github.com/kssteven418/I-BERT
+    https://github.com/huggingface/transformers/blob/main/src/transformers/models/ibert/quant_modules.py
 
+    """
+    
+    def __init__(self, epsilon=1e-6, name=None):
+        super(IntLayerNorm, self).__init__(name=name)
+        self.epsilon = epsilon
+        self.max_bit = 32
+        self.quantized = False
+
+    def get_config(self):
+        return {
+            'epsilon': self.epsilon,
+            'name':self.name
+            }
+
+    def build(self, input_shape):
+        #gamma
+        input_shape = tf.TensorShape(input_shape)
+        self.weight = self.add_weight("gamma",shape=[input_shape[-1]],
+                initializer='random_normal',
+                trainable=True)
+
+        #beta
+        self.bias = self.add_weight("beta",shape=[input_shape[-1]],
+                initializer='random_normal',
+                trainable=True)
+
+    def call(self, x):
+        if not self.quantized:
+            mean, var = tf.nn.moments(x, -1, keepdims=True)
+            y = x - mean
+            x = y / tf.sqrt(self.epsilon + var)
+            x = x * self.weight + self.bias
+        mean, var = tf.nn.moments(x, -1, keepdims=True)
+        y = x - mean
+        x = tf.math.floor(y / tf.sqrt(self.epsilon + var))
+        x = x * self.weight + self.bias
+        return x
+    
 
 class EncoderLayer(tf.keras.layers.Layer):
     def __init__(self, num_heads, d_model, dff, rate=0.1, name=None):

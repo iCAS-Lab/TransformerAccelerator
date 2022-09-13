@@ -1,10 +1,9 @@
-# ignore ALL .log files
 *.log
 *.h5
 *.ipynb
 *.zip
 *.tflite
-# ignore ALL files in ANY directory named temp
+
 models/
 ~/
 __pycache__/
@@ -12,6 +11,10 @@ IMDB_Dataset.py
 train_imdb_model.py
 train_mrpc_model.py
 evaluate_imdb_model.py
+evaluate_mrpc_model.py
+makeMRPCValData.py
 data/
 aclImdb/
+.ipynb_checkpoints/
+debugger_results/
 tflite_models/

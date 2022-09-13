@@ -36,7 +36,6 @@ def from_config(configPath):
     x = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_word_ids", ragged=False)
     seg = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_type_ids", ragged=False)
     mask = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_mask", ragged=False)
-    print("Activation", activation)
     custom_encoder = TransformerModel.BERT(n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, activation=activation, name="transformer")(x, seg)
     encoder_model = tf.keras.Model(inputs=[x, seg, mask], outputs=[custom_encoder])
     encoder_model.compile()

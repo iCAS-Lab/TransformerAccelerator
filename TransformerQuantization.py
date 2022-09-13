@@ -212,6 +212,7 @@ class BERTEncoderQuantizationConfig(tfmot.quantization.keras.QuantizeConfig):
 
 class BERTQuantizationConfig(tfmot.quantization.keras.QuantizeConfig):
   def get_weights_and_quantizers(self, layer):
+    layer.embedding.norm.quantized = True
     return []
     
   def get_activations_and_quantizers(self, layer):
