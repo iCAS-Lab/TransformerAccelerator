@@ -1,5 +1,7 @@
 # Quantization Aware Training for BERT models
 
+## Private repo do not share (for now)
+
 ## Getting Started
 
 Build BERT Transformer model from config or using pretrained [Tensorflow models](https://github.com/google-research/bert)
