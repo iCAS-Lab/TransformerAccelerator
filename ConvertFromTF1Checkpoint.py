@@ -223,6 +223,11 @@ def showOuputMap(outdir=None):
                 fp.write("[X] " +  a + " -> " + b + "\n")
             for a in mappedWeights:
                 fp.write("[_] " +  a + " -> \n")
+            fp.write("*"*25 + "\n")
+            for n in unusedValues.keys():
+                if unusedValues[n] is None:
+                    continue
+                fp.write(str(n) + " " + str(unusedValues[n].shape) + "\n")
     else:
         for b,a in outputMap:
             print("[X]", a, "->", b)
