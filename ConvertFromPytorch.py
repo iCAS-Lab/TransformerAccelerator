@@ -42,14 +42,8 @@ def cosdis(v1, v2):
     # by definition of cosine distance we have
     return sum(v1[0][ch]*v2[0][ch] for ch in common)/v1[2]/v2[2]
 def load_checkpoint(pytorch_model_path):
-
-    # Need to say "model.ckpt" instead of "model.ckpt.index" for tf v2
-
     model = torch.load(pytorch_model_path)
     state_dict = model["model"]
-    #for key in state_dict:
-    #    print(key, state_dict[key].size())
-
     return state_dict
 
 def from_pytorch_model(pytorch_model_path, configPath, strategy=None):

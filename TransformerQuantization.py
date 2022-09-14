@@ -186,9 +186,10 @@ class BERTEncoderQuantizationConfig(tfmot.quantization.keras.QuantizeConfig):
             ] + retVals
     
   def get_activations_and_quantizers(self, layer):
-    return [
-        (layer.activation1, MovingAverageQuantizer(num_bits=ACTIVATION_BITS, symmetric=False, narrow_range=False, per_axis=False))
-        ]
+    return []
+    #return [
+    #    (layer.activation1, MovingAverageQuantizer(num_bits=ACTIVATION_BITS, symmetric=False, narrow_range=False, per_axis=False))
+    #    ]
 
   def set_quantize_weights(self, layer, quantize_weights):
     # Add this line for each item returned in `get_weights_and_quantizers`
@@ -202,7 +203,8 @@ class BERTEncoderQuantizationConfig(tfmot.quantization.keras.QuantizeConfig):
     mha_quant_config.set_quantize_weights(layer.mha, quantize_weights[offset:])
 
   def set_quantize_activations(self, layer, quantize_activations):
-    layer.activation1 = quantize_activations[0]
+    #layer.activation1 = quantize_activations[0]
+    pass
 
   def get_output_quantizers(self, layer):
     return []
@@ -229,6 +231,38 @@ class BERTQuantizationConfig(tfmot.quantization.keras.QuantizeConfig):
 
   def get_config(self):
     return {}
+
+class EmbeddingQuantizationConfig(tfmot.quantization.keras.QuantizeConfig):
+  # Configure how to quantize weights.
+  def get_weights_and_quantizers(self, layer):
+    return [(layer.embeddings, LastValueQuantizer(num_bits=WEIGHT_BITS, symmetric=True, narrow_range=False, per_axis=True))]
+    #return [(layer.embeddings, LastValueQuantizer(num_bits=WEIGHT_BITS, symmetric=True, narrow_range=False, per_axis=False))]
+
+  # Configure how to quantize activations.
+  def get_activations_and_quantizers(self, layer):
+    return []
+    #return [(layer.relu, MovingAverageQuantizer(num_bits=ACTIVATION_BITS, symmetric=False, narrow_range=False, per_axis=False))]
+
+  def set_quantize_weights(self, layer, quantize_weights):
+    # Add this line for each item returned in `get_weights_and_quantizers`
+    # , in the same order
+    #layer.embeddings = quantize_weights[0]
+    layer.embeddings = quantize_weights[0]
+
+  def set_quantize_activations(self, layer, quantize_activations):
+    # Add this line for each item returned in `get_activations_and_quantizers`
+    # , in the same order.
+    #layer.relu = quantize_activations[0]
+    pass
+    
+
+  # Configure how to quantize outputs (may be equivalent to activations).
+  def get_output_quantizers(self, layer):
+    return [MovingAverageQuantizer(num_bits=ACTIVATION_BITS, symmetric=False, narrow_range=False, per_axis=False)]
+
+  def get_config(self):
+    return {}
+
 
 class OutputQuantizationConfig(tfmot.quantization.keras.QuantizeConfig):
   # Configure how to quantize weights.
@@ -271,7 +305,7 @@ def apply_quantization_to_custom(layer):
   if isinstance(layer, TransformerModel.BertEncoder):
     return tfmot.quantization.keras.quantize_annotate_layer(layer, BERTEncoderQuantizationConfig())
   if isinstance(layer, tf.keras.layers.Embedding) or isinstance(layer, TransformerModel.QuantizedEmbedding):
-    return layer
+    return tfmot.quantization.keras.quantize_annotate_layer(layer, EmbeddingQuantizationConfig())
   if isinstance(layer, TransformerModel.LinearLayer):
     return tfmot.quantization.keras.quantize_annotate_layer(layer, OutputQuantizationConfig())
   if isinstance(layer, TransformerModel.BERT):
@@ -283,6 +317,7 @@ def QuantizeTransformer(model):
     with quantize_scope(
         {'QuantizedEmbedding':TransformerModel.QuantizedEmbedding,
         'OutputQuantizationConfig':OutputQuantizationConfig,
+        'EmbeddingQuantizationConfig':EmbeddingQuantizationConfig,
         'LinearLayer':TransformerModel.LinearLayer,
         'ScaledConvolutionalDotProduct':TransformerModel.ScaledConvolutionalDotProduct,
         'ScaledConvolutionalDotProductQuantizeConfig':ScaledConvolutionalDotProductQuantizeConfig,

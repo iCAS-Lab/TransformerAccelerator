@@ -30,14 +30,16 @@ erf_c = 1
 
 #abs function is not supported on edge tpu
 def tf_abs(x):
+    #return tf.math.abs(x)
     return tf_sign(x)*x
 
 #sign function is not supported in tflite
 def tf_sign(x):
-    return tf.tanh(x*1e9)
+    #return tf.math.sign(x)
+    return tf.tanh(x*1e3)
 
 def approx_erf(x):
-    return x*(erf_a * (tf.math.minimum(tf_abs(x), -erf_b)+erf_b)**2 + erf_c)
+    return tf_sign(x)*(erf_a * (tf.math.minimum(tf_abs(x), -erf_b)+erf_b)**2 + erf_c)
 
 def approx_gelu(x):
     return x*0.5*(1+approx_erf(x/math.sqrt(2)))
