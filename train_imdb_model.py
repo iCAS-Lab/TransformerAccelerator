@@ -37,9 +37,7 @@ def fetch_model(batch_size=None):
         identity = TransformerModel.LinearLayer()(embedding)
         #out1 = TransformerModel.ScaledDotProduct(D_MODEL, int(D_MODEL/NUM_HEADS))(identity,identity,identity,None)
         #out1 = TransformerModel.BERTMultiHeadedAttention(NUM_HEADS, D_MODEL)(identity,identity,identity,None)
-        out1 = TransformerModel.BertEncoder(NUM_HEADS, D_MODEL, INTERMEDIATE_SIZE, activation='gelu')(identity, None)
-        out1 = tf.keras.layers.Dropout(0.1)(out1)
-        out1 = TransformerModel.BertEncoder(NUM_HEADS, D_MODEL, INTERMEDIATE_SIZE, activation='gelu')(out1, None)
+        out1 = TransformerModel.BertEncoder(NUM_HEADS, D_MODEL, INTERMEDIATE_SIZE, activation='relu')(identity, None)
         out1 = tf.keras.layers.Dropout(0.1)(out1)
         flat1 = tf.keras.layers.Flatten()(out1)
         output_layer =  tf.keras.layers.Dense(1, name='output_layer')(flat1)
@@ -96,7 +94,7 @@ debugger = tf.lite.experimental.QuantizationDebugger(
     converter=converter, debug_dataset=representative_dataset)
 debugger.run()
 RESULTS_FILE = 'debugger_results/debugger_imdb_results.csv'
-with open(RESULTS_FILE, 'wb') as f:
+with open(RESULTS_FILE, 'w') as f:
     debugger.layer_statistics_dump(f)
 #quantized_tflite_model = converter.convert()
 quantized_tflite_model = debugger.get_nondebug_quantized_model()
@@ -127,6 +125,6 @@ with open(quant_file, 'wb') as f:
 print("Float model in Mb:", os.path.getsize(float_file) / float(2**20))
 print("Quantized model in Mb:", os.path.getsize(quant_file) / float(2**20))
 
-open("tflite_models/mrpc_test_vehicle_int8.tflite", "wb").write(quantized_tflite_model)
-open("tflite_models/mrpc_test_vehicle_fp32.tflite", "wb").write(float_tflite_model)
+open("tflite_models/imdb_test_vehicle_int8.tflite", "wb").write(quantized_tflite_model)
+open("tflite_models/imdb_test_vehicle_fp32.tflite", "wb").write(float_tflite_model)
 print("Done")
