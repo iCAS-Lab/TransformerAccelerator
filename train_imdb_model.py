@@ -1,81 +1,68 @@
-import matplotlib.pyplot as plt
+'''
+Author: Brendan Reidy
+'''
+
+
 import os
-import re
 import tempfile
-import shutil
-import string
 import tensorflow as tf
 
-from tensorflow.keras import layers
-from tensorflow.keras import losses
-import tensorflow_model_optimization as tfmot
-import numpy as np
 import TransformerModel
 import TransformerQuantization
 import IMDB_Dataset
-from tensorboard import main as tb
-import threading
-import os
-import MaskUtils
 #os.environ["CUDA_VISIBLE_DEVICES"]="0"
-
-tensorBoardPath = "/home/brendan/tpu_transformer/tensorboard/"
-
-def launchTensorBoard():
-    import os
-    os.system('tensorboard --logdir=' + tensorBoardPath)
-    return
-
-t = threading.Thread(target=launchTensorBoard, args=([]))
-t.start()
-
-max_features = 10000
-sequence_length = 250
-embedding_dim = 16
-intermediate_size = 64
-d_model = 128
-num_heads = 2
+MAX_FEATURES = 10000
+SEQUENCE_LENGTH = 250
+EMBEDDING_DIM = 16
+INTERMEDIATE_SIZE = 64
+D_MODEL = 128
+NUM_HEADS = 2
 #strategy = tf.distribute.MirroredStrategy()#devices=["/gpu:0", "/gpu:1", "/gpu:2"])
 strategy = tf.distribute.get_strategy()
 BATCH_SIZE_PER_REPLICA = 16
 BATCH_SIZE = BATCH_SIZE_PER_REPLICA * strategy.num_replicas_in_sync
 
-def fetchRawModel(batch_size=None):
-  with strategy.scope():
-    x = tf.keras.Input(shape=(sequence_length,), batch_size=batch_size, dtype=tf.float32, name="encoder_input", ragged=False)
-    embedding = tf.keras.layers.Embedding(max_features+1, d_model, input_length=sequence_length)(x)
-    #identity = embedding
-    identity = TransformerModel.LinearLayer()(embedding)
-    #out1 = TransformerModel.ScaledDotProduct(d_model, int(d_model/num_heads))(identity,identity,identity,None)
-    #out1 = TransformerModel.BERTMultiHeadedAttention(num_heads, d_model)(identity,identity,identity,None)
-    out1 = TransformerModel.BertEncoder(num_heads, d_model, intermediate_size, activation='gelu')(identity, None)
-    out1 = tf.keras.layers.Dropout(0.1)(out1)
-    flat1 = tf.keras.layers.Flatten()(out1)
-    output_layer =  tf.keras.layers.Dense(1, name='output_layer')(flat1)
-    model = tf.keras.Model(inputs=[x], outputs=[output_layer], name="transformer")
-  return model
+EPOCHS = 1
+
+def fetch_model(batch_size=None):
+    '''
+    fetch_model
+    INPUT:
+    OUTPUT
+    '''
+    with strategy.scope():
+        inp = tf.keras.Input(shape=(SEQUENCE_LENGTH,), batch_size=batch_size, dtype=tf.float32, name="encoder_input", ragged=False)
+        embedding = tf.keras.layers.Embedding(MAX_FEATURES+1, D_MODEL, input_length=SEQUENCE_LENGTH)(inp)
+        #identity = embedding
+        identity = TransformerModel.LinearLayer()(embedding)
+        #out1 = TransformerModel.ScaledDotProduct(D_MODEL, int(D_MODEL/NUM_HEADS))(identity,identity,identity,None)
+        #out1 = TransformerModel.BERTMultiHeadedAttention(NUM_HEADS, D_MODEL)(identity,identity,identity,None)
+        out1 = TransformerModel.BertEncoder(NUM_HEADS, D_MODEL, INTERMEDIATE_SIZE, activation='gelu')(identity, None)
+        out1 = tf.keras.layers.Dropout(0.1)(out1)
+        out1 = TransformerModel.BertEncoder(NUM_HEADS, D_MODEL, INTERMEDIATE_SIZE, activation='gelu')(out1, None)
+        out1 = tf.keras.layers.Dropout(0.1)(out1)
+        flat1 = tf.keras.layers.Flatten()(out1)
+        output_layer =  tf.keras.layers.Dense(1, name='output_layer')(flat1)
+    return tf.keras.Model(inputs=[inp], outputs=[output_layer], name="transformer")
   
-train_ds,val_ds,test_ds = IMDB_Dataset.fetch_data(BATCH_SIZE)
-epochs = 1
-model = fetchRawModel()
+train_ds, val_ds, test_ds = IMDB_Dataset.fetch_data(BATCH_SIZE)
+model = fetch_model()
 model.summary()
 
 with strategy.scope():
-  model.compile(loss=losses.BinaryCrossentropy(from_logits=True),
-    optimizer='adam',
-    metrics=tf.metrics.BinaryAccuracy(threshold=0.0))
+    model.compile(loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
+      optimizer='adam',
+      metrics=tf.metrics.BinaryAccuracy(threshold=0.0))
 
-tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=tensorBoardPath, histogram_freq=1)
 history = model.fit(
     train_ds,
     validation_data=val_ds,
-    epochs=epochs,
-    callbacks=[tensorboard_callback])
+    epochs=EPOCHS)
 
 quant_aware_model = TransformerQuantization.QuantizeTransformer(model)
 tf.keras.backend.clear_session()
 
-quant_aware_model.compile(loss=losses.BinaryCrossentropy(from_logits=True),
+quant_aware_model.compile(loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
               optimizer='adam',
               metrics=tf.metrics.BinaryAccuracy(threshold=0.0))
 quant_aware_model.summary()
@@ -83,13 +70,17 @@ quant_aware_model.summary()
 quant_aware_model.fit(
     train_ds,
     validation_data=val_ds,
-    epochs=epochs,
-    callbacks=[tensorboard_callback])
+    epochs=EPOCHS)
 
 train_ds,val_ds,test_ds = IMDB_Dataset.fetch_data(1)
 def representative_dataset():
-  for data in val_ds.take(400):
-    yield [tf.dtypes.cast(tf.dtypes.cast(data[0], tf.uint8), tf.float32)]
+    '''
+    representative_dataset
+    description:
+      generates a representative dataset for quantized model
+    '''
+    for data in val_ds.take(400):
+        yield [tf.dtypes.cast(tf.dtypes.cast(data[0], tf.uint8), tf.float32)]
 
 quant_aware_model.input.set_shape((1,) + quant_aware_model.input.shape[1:])
 
@@ -105,8 +96,8 @@ debugger = tf.lite.experimental.QuantizationDebugger(
     converter=converter, debug_dataset=representative_dataset)
 debugger.run()
 RESULTS_FILE = 'debugger_results/debugger_imdb_results.csv'
-with open(RESULTS_FILE, 'w') as f:
-  debugger.layer_statistics_dump(f)
+with open(RESULTS_FILE, 'wb') as f:
+    debugger.layer_statistics_dump(f)
 #quantized_tflite_model = converter.convert()
 quantized_tflite_model = debugger.get_nondebug_quantized_model()
 """
@@ -117,7 +108,6 @@ debugger = tf.lite.experimental.QuantizationDebugger(
     converter=converter,
     debug_dataset=representative_dataset,
     debug_options=debug_options)
-  
 debugger.run()
 RESULTS_FILE = 'debugger_results/debugger_imdb_results.csv'
 with open(RESULTS_FILE, 'w') as f:
@@ -129,15 +119,14 @@ quantized_tflite_model = debugger.get_nondebug_quantized_model()
 _, quant_file = tempfile.mkstemp('.tflite')
 _, float_file = tempfile.mkstemp('.tflite')
 with open(float_file, 'wb') as f:
-  f.write(float_tflite_model)
+    f.write(float_tflite_model)
 
 with open(quant_file, 'wb') as f:
-  f.write(quantized_tflite_model)
+    f.write(quantized_tflite_model)
 
 print("Float model in Mb:", os.path.getsize(float_file) / float(2**20))
 print("Quantized model in Mb:", os.path.getsize(quant_file) / float(2**20))
 
 open("tflite_models/mrpc_test_vehicle_int8.tflite", "wb").write(quantized_tflite_model)
 open("tflite_models/mrpc_test_vehicle_fp32.tflite", "wb").write(float_tflite_model)
-
 print("Done")

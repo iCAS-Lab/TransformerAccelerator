@@ -4,6 +4,7 @@
 *.zip
 *.tflite
 
+.vscode/
 models/
 ~/
 __pycache__/

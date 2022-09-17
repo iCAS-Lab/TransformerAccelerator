@@ -1,23 +1,11 @@
-import matplotlib.pyplot as plt
 import os
-import re
 import tempfile
-import shutil
-import json
-import string
 
 import tensorflow as tf
-import numpy as np
 import tensorflow_models as tfm
-import tensorflow_hub as hub
 import tensorflow_datasets as tfds
 
-from tensorflow.keras import layers
-from tensorflow.keras import losses
-import tensorflow_model_optimization as tfmot
-
 import TransformerQuantization
-import TransformerModel
 import ConvertModel
 
 os.environ["CUDA_VISIBLE_DEVICES"]="1"
@@ -161,23 +149,6 @@ max_seq_length = 128
 packer = tfm.nlp.layers.BertPackInputs(
     seq_length=max_seq_length,
     special_tokens_dict = tokenizer.get_special_tokens_dict())
-
-class BertInputProcessor(tf.keras.layers.Layer):
-    def __init__(self, tokenizer, packer):
-        super().__init__()
-        self.tokenizer = tokenizer
-        self.packer = packer
-
-    def call(self, inputs):
-        tok1 = self.tokenizer(inputs['sentence1'])
-        tok2 = self.tokenizer(inputs['sentence2'])
-
-        packed = self.packer([tok1, tok2])
-
-        if 'label' in inputs:
-            return packed, inputs['label']
-        else:
-            return packed
 
 bert_inputs_processor = BertInputProcessor(tokenizer, packer)
 glue_train = glue['train'].map(bert_inputs_processor).prefetch(1)

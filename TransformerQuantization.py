@@ -235,7 +235,7 @@ class BERTQuantizationConfig(tfmot.quantization.keras.QuantizeConfig):
 class EmbeddingQuantizationConfig(tfmot.quantization.keras.QuantizeConfig):
   # Configure how to quantize weights.
   def get_weights_and_quantizers(self, layer):
-    return [(layer.embeddings, LastValueQuantizer(num_bits=WEIGHT_BITS, symmetric=True, narrow_range=False, per_axis=True))]
+    return [(layer.embeddings, LastValueQuantizer(num_bits=WEIGHT_BITS, symmetric=True, narrow_range=False, per_axis=False))]
     #return [(layer.embeddings, LastValueQuantizer(num_bits=WEIGHT_BITS, symmetric=True, narrow_range=False, per_axis=False))]
 
   # Configure how to quantize activations.
