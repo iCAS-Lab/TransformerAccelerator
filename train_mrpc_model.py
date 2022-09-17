@@ -22,7 +22,7 @@ import ConvertModel
 
 os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
-model_dir = "/home/brendan/TransformerAccelerator/models/uncased_L-12_H-768_A-12"
+model_dir = "models/uncased_L-12_H-768_A-12"
 
 #strategy = tf.distribute.MirroredStrategy()#devices=["/gpu:0", "/gpu:1", "/gpu:2"])
 strategy = tf.distribute.get_strategy()
