@@ -8,10 +8,12 @@
 import tensorflow as tf
 import torch
 import numpy as np
+import os
+import re
 import json
 import TransformerModel
-import re
-import os
+from collections import Counter
+from math import sqrt
 from tensorflow.python.training import py_checkpoint_reader
 
 
@@ -21,8 +23,6 @@ mappedWeights = []
 outputMap = []
 unusedValues = {}
 def word2vec(word):
-    from collections import Counter
-    from math import sqrt
 
     # count the characters in word
     cw = Counter(word)

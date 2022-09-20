@@ -67,7 +67,7 @@ glue_train = glue['train'].map(bert_inputs_processor).prefetch(1)
 glue_validation = glue['validation'].map(bert_inputs_processor).prefetch(1)
 glue_test = glue['test'].map(bert_inputs_processor).prefetch(1)
 
-epochs = 6
+epochs = 1
 eval_batch_size = 32
 
 train_data_size = info.splits['train'].num_examples
