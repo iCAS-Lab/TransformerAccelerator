@@ -13,7 +13,7 @@ import json
 import TransformerModel
 import tensorflow as tf
 
-def BERT_Classifier(backbone_model, classes, strategy = None):
+def BERT_Classifier(backbone_model, classes):
     backbone = backbone_model
     x = backbone.output
     x = tf.keras.layers.Dropout(0.1)(x)
@@ -36,7 +36,7 @@ def from_config(configPath):
     x = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_word_ids", ragged=False)
     seg = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_type_ids", ragged=False)
     mask = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_mask", ragged=False)
-    custom_encoder = TransformerModel.BERT(n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, activation=activation, name="transformer")(x, seg)
+    custom_encoder = TransformerModel.BERT(n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, activation=activation, name="transformer")(x, seg, mask)
     encoder_model = tf.keras.Model(inputs=[x, seg, mask], outputs=[custom_encoder])
     return encoder_model
 

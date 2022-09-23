@@ -51,7 +51,7 @@ def from_hub_encoder(hub_encoder, configPath, strategy=None):
         x = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_word_ids", ragged=False)
         seg = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_type_ids", ragged=False)
         mask = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_mask", ragged=False)
-        custom_encoder = TransformerModel.BERT(n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, activation=activation, name="transformer")(x, seg)
+        custom_encoder = TransformerModel.BERT(n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, activation=activation, name="transformer")(x, seg, mask)
         encoder_model = tf.keras.Model(inputs=[x, seg, mask], outputs=[custom_encoder])
     inject_weights(hub_encoder, encoder_model, n_layers, num_heads)
     return encoder_model

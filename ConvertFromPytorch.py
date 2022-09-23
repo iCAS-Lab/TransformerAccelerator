@@ -66,7 +66,7 @@ def from_pytorch_model(pytorch_model_path, configPath, strategy=None):
     x = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_word_ids", ragged=False)
     seg = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_type_ids", ragged=False)
     mask = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_mask", ragged=False)
-    custom_encoder = TransformerModel.BERT(n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, activation=activation, name="transformer")(x, seg)
+    custom_encoder = TransformerModel.BERT(n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, activation=activation, name="transformer")(x, seg, mask)
     encoder_model = tf.keras.Model(inputs=[x, seg, mask], outputs=[custom_encoder])
     encoder_model.compile()
     inject_weights(tf1_checkpoint, encoder_model, n_layers, num_heads)
@@ -266,6 +266,6 @@ def getTrainableParams(model):
     return totalSize
 
 
-PATH = "/home/brendan/IBERT/I-BERT/outputs/none/QQP-base/wd0.1_ad0.1_d0.1_lr1e-5/0913-160322_ckpt/checkpoint_best.pt"
+PATH = "/home/user/Documents/I-BERT/outputs/none/QQP-base/wd0.1_ad0.1_d0.1_lr1e-5/0916-201442_ckpt"
 config_file = "/home/brendan/TransformerAccelerator/models/roberta_config.json"
 from_pytorch_model(PATH, config_file)
