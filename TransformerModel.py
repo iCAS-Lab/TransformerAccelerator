@@ -5,6 +5,7 @@
 # Last Modified: Sep 11 2022
 #
 
+from tokenize import Funny
 import tensorflow as tf
 import sys
 import numpy as np
@@ -488,9 +489,9 @@ class BERT(tf.keras.layers.Layer):
                 initializer='random_normal',
                 trainable=True)
 
-    def call(self, x, seg, training=True):
-        mask = tf.where(tf.equal(x,0), tf.ones_like(x)*-1e9, tf.zeros_like(x))
+    def call(self, x, seg, mask, training=True):
         mask = tf.expand_dims(mask, axis=1)
+        mask = mask*1e-9
 
         x = self.embedding(x,seg)
         for layer in self.enc_layers:
@@ -514,9 +515,6 @@ class BertEncoder(tf.keras.layers.Layer):
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-12, name="attention_layer_norm")
         self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-12, name="output_layer_norm")
 
-        #self.layernorm1 = IntLayerNorm(epsilon=1e-12, name="attention_layer_norm")
-        #self.layernorm2 = IntLayerNorm(epsilon=1e-12, name="output_layer_norm")
-        
         self.dropout1 = tf.keras.layers.Dropout(rate)
         self.dropout2 = tf.keras.layers.Dropout(rate)
         self.activation = activation
@@ -553,7 +551,6 @@ class BertEncoder(tf.keras.layers.Layer):
                 trainable=True)
 
     def call(self, x, mask, training=True):
-        #x = tf.squeeze(x)
         attn_output = self.mha(x, x, x, mask)
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(x + attn_output) # (batch_Size, seq_len, d_model)
