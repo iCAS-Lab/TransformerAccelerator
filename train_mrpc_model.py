@@ -10,7 +10,7 @@ import ConvertModel
 
 os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
-model_dir = "models/uncased_L-12_H-768_A-12"
+model_dir = "models/uncased_L-8_H-256_A-8_untrained"
 
 #strategy = tf.distribute.MirroredStrategy()#devices=["/gpu:0", "/gpu:1", "/gpu:2"])
 strategy = tf.distribute.get_strategy()
@@ -18,8 +18,8 @@ BATCH_SIZE_PER_REPLICA = 16
 batch_size = BATCH_SIZE_PER_REPLICA * strategy.num_replicas_in_sync
 
 def fetchRawModel(batch_size=None):
-    #bert_encoder = ConvertModel.from_config(model_dir + "/bert_config.json")
-    bert_encoder = ConvertModel.from_tf1_checkpoint(model_dir)
+    bert_encoder = ConvertModel.from_config(model_dir + "/bert_config.json", use_conv=False, intermediate_partitions=4)
+    #bert_encoder = ConvertModel.from_tf1_checkpoint(model_dir)
     bert_classifier = ConvertModel.BERT_Classifier(bert_encoder, 2)
     return bert_classifier
 
