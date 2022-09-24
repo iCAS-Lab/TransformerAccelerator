@@ -131,20 +131,18 @@ class LinearLayer(tf.keras.layers.Layer):
         return x
 
 class ScaledConvolutionalDotProduct(tf.keras.layers.Layer):
-    def __init__(self, d_model, look_back=1, name=None):
+    def __init__(self, inp_size, d_model, name=None):
         super(ScaledConvolutionalDotProduct, self).__init__(name=name)
         self.d_model = d_model
-        self.relu1 = activations.get('relu')
-        self.relu2 = activations.get('relu')
-        self.relu3 = activations.get('relu')
+        self.inp_size = inp_size
         self.softmax = activations.get('softmax')
         self.rank = 2
-        self.look_back = look_back
+        self.look_back = 1
         self.strides = conv_utils.normalize_tuple(1, self.rank, 'strides')
 
     def build(self, input_shape):
         input_shape = tensor_shape.TensorShape(input_shape)
-        kernel_shape = (1,self.look_back,input_shape[-1],self.d_model)
+        kernel_shape = (1,self.look_back,self.inp_size,self.d_model)
         self.kernel_q = self.add_weight(
             name='kernel_q',
             shape=kernel_shape,
@@ -167,21 +165,21 @@ class ScaledConvolutionalDotProduct(tf.keras.layers.Layer):
             dtype=self.dtype)
 
         self.bias_q = self.add_weight(
-            name='bias',
+            name='bias_q',
             shape=(self.d_model,),
             initializer='random_normal',
             trainable=True,
             dtype=self.dtype)
 
         self.bias_k = self.add_weight(
-            name='bias',
+            name='bias_k',
             shape=(self.d_model,),
             initializer='random_normal',
             trainable=True,
             dtype=self.dtype)
 
         self.bias_v = self.add_weight(
-            name='bias',
+            name='bias_v',
             shape=(self.d_model,),
             initializer='random_normal',
             trainable=True,
@@ -199,54 +197,29 @@ class ScaledConvolutionalDotProduct(tf.keras.layers.Layer):
             name='conv1d')
 
     def get_config(self):
-        config = {
-            'd_model':self.d_model,
-            'look_back':self.look_back,
-            'name':self.name
-        }
-        return config
-        #return {'d_model': self.d_model, 'name':self.name, 'rank':self.rank, 'look_back':self.look_back, 'strides':self.strides, 'data_format':self.data_format}
-
-    def conv_matmul(self, a, b, transpose_b=False):
-        if a.shape[0] is None:
-            return tf.matmul(a,b,transpose_b=transpose_b)
-
-        
-        if transpose_b:
-            b = tf.transpose(b, [0,2,1])
-        
-        retVals = []
-        for x in range(a.shape[0]):
-            a_slice = a[x:x+1]
-            a_slice = tf.expand_dims(a_slice, axis=0)
-            b_slice = b[x:x+1]
-            b_slice = tf.expand_dims(b_slice, axis=0)
-            result = self.relu1(self._convolution_op(a_slice,b_slice))
-            retVals.append(result)
-        concat = tf.concat(retVals, axis=1)
-        concat = tf.squeeze(concat,axis=0)
-        return concat
+        return {'d_model': self.d_model, 'name':self.name, 'inp_size':self.inp_size}
 
     def call(self, q, k, v, mask):
         q = tf.expand_dims(q, axis=0)
         k = tf.expand_dims(k, axis=0)
         v = tf.expand_dims(v, axis=0)
 
-        q = self.relu1(self._convolution_op(q, self.kernel_q) + self.bias_q)
-        k = self.relu2(self._convolution_op(k, self.kernel_k) + self.bias_k)
-        v = self.relu3(self._convolution_op(v, self.kernel_v) + self.bias_v)
+        q = self._convolution_op(q, self.kernel_q) + self.bias_q
+        k = self._convolution_op(k, self.kernel_k) + self.bias_k
+        v = self._convolution_op(v, self.kernel_v) + self.bias_v
         
         q = tf.squeeze(q,axis=0)
         k = tf.squeeze(k,axis=0)
         v = tf.squeeze(v,axis=0)
-        matmul_qk = self.relu1(tf.matmul(q,k, transpose_b=True))
+
+        matmul_qk = tf.matmul(q,k, transpose_b=True)
         dk = tf.cast(tf.shape(k)[-1], tf.float32)
         scaled_attention_logits = matmul_qk / tf.math.sqrt(dk)
 
         if not mask is None:
             scaled_attention_logits += mask
-        attention_weights = scaled_attention_logits#self.softmax(scaled_attention_logits, axis=-1)
-        output = self.relu1(tf.matmul(attention_weights,v))
+        attention_weights = self.softmax(scaled_attention_logits, axis=-1)
+        output = tf.matmul(attention_weights,v)
         return output
 
 class ScaledDotProduct(tf.keras.layers.Layer):
@@ -376,11 +349,15 @@ class MultiHeadedAttention(tf.keras.layers.Layer):
 
 
 class BERTMultiHeadedAttention(tf.keras.layers.Layer):
-    def __init__(self, num_heads, d_model, rate=0.1, activation='gelu', name=None):
+    def __init__(self, num_heads, d_model, rate=0.1, activation='gelu', use_conv=False, name=None):
         super(BERTMultiHeadedAttention, self).__init__(name=name)
         self.attention_heads = []
+        self.use_conv = use_conv
         for i in range(num_heads):
-            sdp = ScaledDotProduct(d_model, int(d_model/num_heads), name=self.name + 'sdp_' + str(i))
+            if not self.use_conv:
+                sdp = ScaledDotProduct(d_model, int(d_model/num_heads), name=self.name + 'sdp_' + str(i))
+            else:
+                sdp = ScaledConvolutionalDotProduct(d_model, int(d_model/num_heads), name=self.name + 'sdp_' + str(i))
             self.attention_heads.append(sdp)
         self.num_heads = num_heads
         self.rate = rate
@@ -400,7 +377,7 @@ class BERTMultiHeadedAttention(tf.keras.layers.Layer):
                 trainable=True)
 
     def get_config(self):
-        return {'d_model': self.d_model, 'num_heads': self.num_heads, 'name':self.name, 'activation':self.activation, 'rate':self.rate}
+        return {'d_model': self.d_model, 'num_heads': self.num_heads, 'use_conv':self.use_conv, 'name':self.name, 'activation':self.activation, 'rate':self.rate}
 
     def call(self, q, k, v, mask, training=True):
         attention_outputs = []
@@ -449,19 +426,21 @@ class BertEmbedding(tf.keras.layers.Layer):
         return self.norm(embedding)
 
 class BERT(tf.keras.layers.Layer):
-    def __init__(self, n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, rate=0.1, activation='gelu', name=None):
+    def __init__(self, n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, rate=0.1, intermediate_partitions=1, use_conv=False, activation='gelu', name=None):
         super(BERT, self).__init__(name=name)
         self.n_layers = n_layers
         self.num_heads = num_heads
         self.vocab_size = vocab_size
         self.seq_len = seq_len
         self.n_segments = n_segments
+        self.use_conv = use_conv
         self.d_model = d_model
+        self.intermediate_partitions = intermediate_partitions
         self.intermediate_size = intermediate_size
 
 
         self.embedding = BertEmbedding(vocab_size, seq_len, n_segments, d_model)
-        self.enc_layers = [BertEncoder(num_heads, d_model, intermediate_size, rate, activation=activation, name="layer_" + str(i)) 
+        self.enc_layers = [BertEncoder(num_heads, d_model, intermediate_size, rate=rate, intermediate_partitions=intermediate_partitions, activation=activation, use_conv=use_conv, name="layer_" + str(i)) 
                         for i in range(n_layers)]
 
         self.activation = activation
@@ -476,10 +455,12 @@ class BERT(tf.keras.layers.Layer):
             'vocab_size': self.vocab_size,
             'seq_len': self.seq_len,
             'n_segments':self.n_segments,
+            'use_conv':self.use_conv,
             'name':self.name,
             'd_model':self.d_model,
             'intermediate_size':self.intermediate_size,
-            'activation':self.activation
+            'activation':self.activation,
+            'intermediate_partitions':self.intermediate_partitions
             }
     def build(self, input_shape):
         self.pooler_transform = self.add_weight(self.name + "pooler_transform_kernel",shape=[self.d_model,self.d_model],
@@ -502,15 +483,17 @@ class BERT(tf.keras.layers.Layer):
         #return {"pooled_output":x}
 
 class BertEncoder(tf.keras.layers.Layer):
-    def __init__(self, num_heads, d_model, intermediate_size, rate=0.1, activation='gelu', name=None):
+    def __init__(self, num_heads, d_model, intermediate_size, rate=0.1, intermediate_partitions=1, activation='gelu', use_conv=False, name=None):
         super(BertEncoder, self).__init__(name=name)
 
         self.d_model = d_model
         self.num_heads = num_heads
         self.intermediate_size = intermediate_size
         self.rate = rate
+        self.use_conv = use_conv
+        self.intermediate_partitions = intermediate_partitions
 
-        self.mha = BERTMultiHeadedAttention(num_heads, d_model, activation=activation, name = "mha")
+        self.mha = BERTMultiHeadedAttention(num_heads, d_model, activation=activation, use_conv=use_conv, name = "mha")
 
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-12, name="attention_layer_norm")
         self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-12, name="output_layer_norm")
@@ -530,11 +513,17 @@ class BertEncoder(tf.keras.layers.Layer):
             'num_heads': self.num_heads,
             'intermediate_size':self.intermediate_size,
             'rate':self.rate,
+            'use_conv':self.use_conv,
             'name':self.name,
-            'activation':self.activation
+            'activation':self.activation,
+            'intermediate_partitions':self.intermediate_partitions
             }
 
     def build(self, input_shape):
+        assert self.intermediate_size % self.intermediate_partitions == 0
+
+        partition_size = int(self.intermediate_size / self.intermediate_partitions)
+        #for partition in range(partition_size)
 
         self.kernel_dff = self.add_weight(self.name + "/intermediate/kernel",shape=[self.d_model,self.intermediate_size],
                 initializer='random_normal',
