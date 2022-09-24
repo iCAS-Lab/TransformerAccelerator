@@ -2,10 +2,8 @@
 # Author: Brendan Reidy
 # Email: bcreidy@email.sc.edu
 # Date created: Sep 10 2022
-# Last Modified: Sep 11 2022
+# Last Modified: Sep 23 2022
 #
-
-from tensorflow.keras.models import Model
 import ConvertModelFromHub
 import ConvertFromTF1Checkpoint
 import os
