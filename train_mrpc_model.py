@@ -10,7 +10,7 @@ import ConvertModel
 
 os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
-model_dir = "models/uncased_L-8_H-256_A-8_untrained"
+model_dir = "models/uncased_L-2_H-128_A-2"
 
 #strategy = tf.distribute.MirroredStrategy()#devices=["/gpu:0", "/gpu:1", "/gpu:2"])
 strategy = tf.distribute.get_strategy()
@@ -18,16 +18,10 @@ BATCH_SIZE_PER_REPLICA = 16
 batch_size = BATCH_SIZE_PER_REPLICA * strategy.num_replicas_in_sync
 
 def fetchRawModel(batch_size=None):
-    bert_encoder = ConvertModel.from_config(model_dir + "/bert_config.json", use_conv=False, intermediate_partitions=4)
-    #bert_encoder = ConvertModel.from_tf1_checkpoint(model_dir)
+    #bert_encoder = ConvertModel.from_config(model_dir + "/bert_config.json")
+    bert_encoder = ConvertModel.from_tf1_checkpoint(model_dir)
     bert_classifier = ConvertModel.BERT_Classifier(bert_encoder, 2)
     return bert_classifier
-
-def compileQuantizedModel(tf_quantModel):
-    rawModel = fetchRawModel(batch_size=1)
-    quant_aware_model = TransformerQuantization.QuantizeTransformer(rawModel)
-    quant_aware_model.set_weights(tf_quantModel.get_weights())
-    return quant_aware_model
 
 bert_classifier = fetchRawModel()
 
@@ -105,7 +99,11 @@ bert_classifier.fit(
       batch_size=batch_size,
       epochs=epochs)
 
-quant_aware_model = TransformerQuantization.QuantizeTransformer(bert_classifier)
+print("VAL1")
+bert_classifier.evaluate(glue_validation)
+"""
+import EdgeTPUPrecompiler
+bert_classifier = EdgeTPUPrecompiler.partition_model(bert_classifier, intermediate_partitions=2)
 
 linear_decay = tf.keras.optimizers.schedules.PolynomialDecay(
     initial_learning_rate=initial_learning_rate,
@@ -117,43 +115,20 @@ warmup_schedule = tfm.optimization.lr_schedule.LinearWarmup(
     after_warmup_lr_sched = linear_decay,
     warmup_steps = warmup_steps
 )
-
 optimizer = tf.keras.optimizers.experimental.Adam(
     learning_rate = warmup_schedule)
 
 metrics = [tf.keras.metrics.SparseCategoricalAccuracy('accuracy', dtype=tf.float32)]
 loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
 
-quant_aware_model.compile(
+bert_classifier.compile(
     optimizer=optimizer,
     loss=loss,
     metrics=metrics)
-quant_aware_model.summary()
 
-quant_aware_model.fit(
-      glue_train,
-      validation_data=(glue_validation),
-      batch_size=batch_size,
-      epochs=epochs)
-
-glue, info = tfds.load('glue/mrpc',
-                       with_info=True,
-                       batch_size=1)
-
-tokenizer = tfm.nlp.layers.FastWordpieceBertTokenizer(
-    vocab_file=os.path.join(model_dir, "vocab.txt"),
-    lower_case=True)
-
-max_seq_length = 128
-
-packer = tfm.nlp.layers.BertPackInputs(
-    seq_length=max_seq_length,
-    special_tokens_dict = tokenizer.get_special_tokens_dict())
-
-bert_inputs_processor = BertInputProcessor(tokenizer, packer)
-glue_train = glue['train'].map(bert_inputs_processor).prefetch(1)
-glue_validation = glue['validation'].map(bert_inputs_processor).prefetch(1)
-glue_test = glue['test'].map(bert_inputs_processor).prefetch(1)
+print("VAL2")
+"""
+bert_classifier.evaluate(glue_validation)
 
 def representative_dataset():
   for data in glue_validation.take(50):
@@ -161,13 +136,14 @@ def representative_dataset():
     tf.dtypes.cast(tf.dtypes.cast(data[0]["input_mask"], tf.float32), tf.float32),
     tf.dtypes.cast(tf.dtypes.cast(data[0]["input_type_ids"], tf.float32), tf.float32)]
 
-for input_idx in range(len(quant_aware_model.input)):
-    quant_aware_model.input[input_idx].set_shape((1,) + quant_aware_model.input[input_idx].shape[1:])
+for input_idx in range(len(bert_classifier.input)):
+    bert_classifier.input[input_idx].set_shape((1,) + bert_classifier.input[input_idx].shape[1:])
+
 
 float_converter = tf.lite.TFLiteConverter.from_keras_model(bert_classifier)
 float_tflite_model = float_converter.convert()
 
-converter = tf.lite.TFLiteConverter.from_keras_model(quant_aware_model)
+converter = tf.lite.TFLiteConverter.from_keras_model(bert_classifier)
 converter.optimizations = [tf.lite.Optimize.DEFAULT]
 converter.representative_dataset = representative_dataset
 converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]

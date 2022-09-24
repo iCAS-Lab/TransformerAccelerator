@@ -9,7 +9,7 @@ from tokenize import Funny
 import tensorflow as tf
 import sys
 import numpy as np
-import MaskUtils
+import utils.MaskUtils
 import tensorflow_model_optimization as tfmot
 from keras import activations
 from tensorflow.python.framework import tensor_shape
@@ -470,6 +470,14 @@ class BERT(tf.keras.layers.Layer):
                 initializer='random_normal',
                 trainable=True)
 
+    def set_partitions(self,n_partitions):
+        assert self.intermediate_partitions==1
+
+        self.intermediate_partitions = n_partitions
+        self.use_partitions = True
+        for enc in self.enc_layers:
+            enc.set_partitions(n_partitions)
+
     def call(self, x, seg, mask, training=True):
         mask = tf.expand_dims(mask, axis=1)
         mask = mask*1e-9
@@ -501,6 +509,7 @@ class BertEncoder(tf.keras.layers.Layer):
         self.dropout1 = tf.keras.layers.Dropout(rate)
         self.dropout2 = tf.keras.layers.Dropout(rate)
         self.activation = activation
+        self.use_partitions = (not self.intermediate_partitions==1)
 
         self.activation1 = activations.get(activation)
         if activation == 'gelu':
@@ -519,32 +528,100 @@ class BertEncoder(tf.keras.layers.Layer):
             'intermediate_partitions':self.intermediate_partitions
             }
 
-    def build(self, input_shape):
+    def build_partitions(self):
         assert self.intermediate_size % self.intermediate_partitions == 0
 
         partition_size = int(self.intermediate_size / self.intermediate_partitions)
-        #for partition in range(partition_size)
 
+        curr_dff = self.kernel_dff
+        curr_bias_dff = self.bias_dff
+        curr_out = self.kernel_out
+
+        self.kernel_dff_part = []
+        self.bias_dff_part = []
+        self.kernel_out_part = []
+        for i in range(self.intermediate_partitions):
+            self.kernel_dff_part.append(self.add_weight(self.name + "/intermediate_partition_" + str(i) + "/kernel",shape=[self.d_model,partition_size],
+                    initializer='random_normal',
+                    trainable=True))
+            self.bias_dff_part.append(self.add_weight(self.name + "/intermediate_partition_" + str(i) + "/bias",shape=[partition_size],
+                    initializer='random_normal',
+                    trainable=True))
+            self.kernel_out_part.append(self.add_weight(self.name + "/kernel_out_partition_" + str(i) + "",shape=[partition_size,self.d_model],
+                    initializer='random_normal',
+                    trainable=True))
+
+        for i in range(self.intermediate_partitions):
+            temp_kernel_dff = curr_dff[:,i*partition_size:(i+1)*partition_size]
+            self.kernel_dff_part[i].assign(temp_kernel_dff)
+
+            temp_bias_dff = curr_bias_dff[i*partition_size:(i+1)*partition_size]
+            self.bias_dff_part[i].assign(temp_bias_dff)
+
+            temp_kernel_out = curr_out[i*partition_size:(i+1)*partition_size,:]
+            self.kernel_out_part[i].assign(temp_kernel_out)
+
+    def build_standard(self):
         self.kernel_dff = self.add_weight(self.name + "/intermediate/kernel",shape=[self.d_model,self.intermediate_size],
                 initializer='random_normal',
                 trainable=True)
         self.bias_dff = self.add_weight(self.name + "/intermediate/bias",shape=[self.intermediate_size],
                 initializer='random_normal',
                 trainable=True)
-
         self.kernel_out = self.add_weight(self.name + "/kernel_out",shape=[self.intermediate_size,self.d_model],
                 initializer='random_normal',
                 trainable=True)
+
+
+
+    def build(self, input_shape):
+        self.build_standard()
+
         self.bias_out = self.add_weight(self.name + "/bias_out",shape=[self.d_model],
                 initializer='random_normal',
                 trainable=True)
+
+
+        if self.use_partitions:
+            self.build_partitions()
+
+    def compute_ffn_partition(self,x):
+        ffn_outputs = []
+        for i in range(self.intermediate_partitions):
+            ffn_output1 = self.activation1(tf.matmul(x, self.kernel_dff_part[i]) + self.bias_dff_part[i])
+            ffn_outputs.append(ffn_output1)
+        ffn_output2 = tf.matmul(ffn_outputs[0], self.kernel_out_part[0])
+        for i in range(1,self.intermediate_partitions):
+            ffn_output2 += tf.matmul(ffn_outputs[i], self.kernel_out_part[i])
+        ffn_output2 = ffn_output2 + self.bias_out
+        return ffn_output2
+
+    def compute_ffn_standard(self,x):
+        ffn_output1 = self.activation1(tf.matmul(x, self.kernel_dff) + self.bias_dff)
+        ffn_output2 = tf.matmul(ffn_output1, self.kernel_out) + self.bias_out
+        return ffn_output2
+
+    def compute_ffn(self,x):
+        if not self.use_partitions:
+            return self.compute_ffn_standard(x)
+        return self.compute_ffn_partition(x)
+
+    def set_partitions(self, n_partitions):
+        assert self.intermediate_partitions==1
+
+        self.intermediate_partitions = n_partitions
+        self.use_partitions = True
+        self.build_partitions()
 
     def call(self, x, mask, training=True):
         attn_output = self.mha(x, x, x, mask)
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(x + attn_output) # (batch_Size, seq_len, d_model)
+        """
         ffn_output1 = self.activation1(tf.matmul(out1, self.kernel_dff) + self.bias_dff)
         ffn_output2 = tf.matmul(ffn_output1, self.kernel_out) + self.bias_out
+        """
+        ffn_output2 = self.compute_ffn(out1)
         ffn_output3 = self.dropout2(ffn_output2, training=training)
         out2 = self.layernorm2(out1 + ffn_output3)
         return out2
