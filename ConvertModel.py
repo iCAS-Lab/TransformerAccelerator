@@ -2,8 +2,9 @@
 # Author: Brendan Reidy
 # Email: bcreidy@email.sc.edu
 # Date created: Sep 10 2022
-# Last Modified: Sep 23 2022
+# Last Modified: Sep 12 2022
 #
+
 import ConvertModelFromHub
 import ConvertFromTF1Checkpoint
 import os
@@ -16,7 +17,7 @@ def BERT_Classifier(backbone_model, classes):
     x = backbone.output
     x = tf.keras.layers.Dropout(0.1)(x)
     x = tf.keras.layers.Dense(classes, activation='tanh')(x)
-    model = Model(inputs=backbone.input, outputs=x)
+    model = tf.keras.Model(inputs=backbone.input, outputs=x)
     return model
 
 def from_config(configPath, use_conv=False, intermediate_partitions=1):
