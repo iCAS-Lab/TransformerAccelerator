@@ -45,7 +45,7 @@ def load_checkpoint(file_name):
     }
     return state_dict
 
-def from_tf1_checkpoint(tf1_checkpoint_path, configPath, strategy=None):
+def from_tf1_checkpoint(tf1_checkpoint_path, configPath, use_conv=False):
 
     tf1_checkpoint = load_checkpoint(tf1_checkpoint_path)
     global unusedValues
@@ -65,7 +65,7 @@ def from_tf1_checkpoint(tf1_checkpoint_path, configPath, strategy=None):
     x = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_word_ids", ragged=False)
     seg = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_type_ids", ragged=False)
     mask = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_mask", ragged=False)
-    custom_encoder = TransformerModel.BERT(n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, activation=activation, name="transformer")(x, seg, mask)
+    custom_encoder = TransformerModel.BERT(n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, activation=activation, use_conv=use_conv, name="transformer")(x, seg, mask)
     encoder_model = tf.keras.Model(inputs=[x, seg, mask], outputs=[custom_encoder])
     encoder_model.compile()
     inject_weights(tf1_checkpoint, encoder_model, n_layers, num_heads)
@@ -100,7 +100,6 @@ def getWeightByName(state_dict, name, exact=False):
         elif name in weight_name:
             return weight_name, state_dict[weight_name]
     raise Exception("ModelConverter was unable to find layer: " + name + "\nDid you mean " + str(closestVal))
-    return None
 
 def setWeightByName(model, name, inWeight, pseudoName):
     global outputMap
@@ -114,6 +113,8 @@ def setWeightByName(model, name, inWeight, pseudoName):
             closest = sim
             closestVal = weight.name
         if name in weight.name:
+            if len(weight.shape) > len(inWeight.shape):
+                inWeight = tf.expand_dims(inWeight, axis=0)
             assert weight.shape==inWeight.shape
             tempName = weight.name
             model.weights[i].assign(inWeight)
@@ -155,8 +156,8 @@ def injectMHA(fromModel, toModel, num_heads, layer=0):
 
     n1,output_kernel = getWeightByName(fromModel, "layer_" + str(layer) + "/output/dense/kernel")
     n2,output_bias = getWeightByName(fromModel, "layer_" + str(layer) + "/output/dense/bias")
-    setWeightByName(toModel, "layer_" + str(layer) + "/kernel_out:", output_kernel, n1)
-    setWeightByName(toModel, "layer_" + str(layer) + "/bias_out:", output_bias, n2)
+    setWeightByName(toModel, "/layer_" + str(layer) + "/out/kernel:0", output_kernel, n1)
+    setWeightByName(toModel, "/layer_" + str(layer) + "/out/bias:0", output_bias, n2)
 
     n1,query_kernel = getWeightByName(fromModel, "layer_" + str(layer) + "/attention/self/query/kernel")
     n2,query_bias = getWeightByName(fromModel, "layer_" + str(layer) + "/attention/self/query/bias")
@@ -167,8 +168,8 @@ def injectMHA(fromModel, toModel, num_heads, layer=0):
     attn_output_kernel_name,attn_output_kernel = getWeightByName(fromModel, "layer_" + str(layer) + "/attention/output/dense/kernel")
     n7,attn_output_bias = getWeightByName(fromModel, "layer_" + str(layer) + "/attention/output/dense/bias")
 
-    setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhaattention_output_kernel:", attn_output_kernel, attn_output_kernel_name)
-    setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhaattention_output_bias:", attn_output_bias,n7)
+    setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhaattention_output/kernel:0", attn_output_kernel, attn_output_kernel_name)
+    setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhaattention_output/bias:0", attn_output_bias,n7)
     
     d_size = int(query_kernel.shape[0] / num_heads)
     for h in range(num_heads):
@@ -181,14 +182,14 @@ def injectMHA(fromModel, toModel, num_heads, layer=0):
         valueTempK = value_kernel[:,h*d_size:(h+1)*d_size]
         valueTempB = value_bias[h*d_size:(h+1)*d_size]
 
-        setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhasdp_" + str(h) + "/mhasdp_" + str(h) + "_kernel_q", queryTempK, n1)
-        setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhasdp_" + str(h) + "/mhasdp_" + str(h) + "_bias_q", queryTempB, n2)
+        setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhasdp_" + str(h) + "/query/kernel:0", queryTempK, n1)
+        setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhasdp_" + str(h) + "/query/bias:0", queryTempB, n2)
 
-        setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhasdp_" + str(h) + "/mhasdp_" + str(h) + "_kernel_k", keyTempK, n3)
-        setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhasdp_" + str(h) + "/mhasdp_" + str(h) + "_bias_k", keyTempB, n4)
+        setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhasdp_" + str(h) + "/key/kernel:0", keyTempK, n3)
+        setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhasdp_" + str(h) + "/key/bias:0", keyTempB, n4)
 
-        setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhasdp_" + str(h) + "/mhasdp_" + str(h) + "_kernel_v", valueTempK, n5)
-        setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhasdp_" + str(h) + "/mhasdp_" + str(h) + "_bias_v", valueTempB, n6)
+        setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhasdp_" + str(h) + "/value/kernel:0", valueTempK, n5)
+        setWeightByName(toModel, "layer_" + str(layer) + "/mha/mhasdp_" + str(h) + "/value/bias:0", valueTempB, n6)
     #"""
 
 
@@ -209,8 +210,8 @@ def inject_weights(fromModel, toModel, n_layers, num_heads):
 
     n1,pooler_kernel = getWeightByName(fromModel, "pooler/dense/kernel")
     n2,pooler_bias = getWeightByName(fromModel, "pooler/dense/bias")
-    setWeightByName(toModel, "transformer/transformerpooler_transform_kernel", pooler_kernel,n1)
-    setWeightByName(toModel, "transformer/transformerpooler_transform_bias", pooler_bias,n2)
+    setWeightByName(toModel, "transformer/transformerpooler_transform/kernel:0", pooler_kernel,n1)
+    setWeightByName(toModel, "transformer/transformerpooler_transform/bias:0", pooler_bias,n2)
     showOuputMap(outdir="model_mapping.log")
 
 def showOuputMap(outdir=None):

@@ -12,11 +12,11 @@ import json
 import TransformerModel
 import tensorflow as tf
 
-def BERT_Classifier(backbone_model, classes):
+def BERT_Classifier(backbone_model, classes, use_conv=False):
     backbone = backbone_model
     x = backbone.output
     x = tf.keras.layers.Dropout(0.1)(x)
-    x = tf.keras.layers.Dense(classes, activation='tanh')(x)
+    x = TransformerModel.Dense(classes, inp_size=backbone.output.shape[-1], use_conv=use_conv, activation='tanh')(x)
     model = tf.keras.Model(inputs=backbone.input, outputs=x)
     return model
 
@@ -43,8 +43,9 @@ def from_config(configPath, use_conv=False, intermediate_partitions=1):
 def from_hub_encoder(hub_encoder, configPath, strategy=None):
     return ConvertModelFromHub.from_hub_encoder(hub_encoder, configPath, strategy=strategy)
 
-def from_tf1_checkpoint(model_dir):
+def from_tf1_checkpoint(model_dir, use_conv=False):
     return ConvertFromTF1Checkpoint.from_tf1_checkpoint(
         os.path.join(model_dir, "bert_model.ckpt"),
-        os.path.join(model_dir, "bert_config.json")
+        os.path.join(model_dir, "bert_config.json"),
+        use_conv=use_conv
     )
