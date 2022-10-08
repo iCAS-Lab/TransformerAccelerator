@@ -31,13 +31,10 @@ erf_c = 1
 
 #abs function is not supported on edge tpu
 def tf_abs(x):
-    #return tf.math.abs(x)
-    return tf_sign(x)*x
+    return tf.math.abs(x)
 
-#sign function is not supported in tflite
 def tf_sign(x):
-    #return tf.math.sign(x)
-    return tf.tanh(x*1e3)
+    return tf.math.sign(x)
 
 def approx_erf(x):
     return tf_sign(x)*(erf_a * (tf.math.minimum(tf_abs(x), -erf_b)+erf_b)**2 + erf_c)
@@ -46,6 +43,9 @@ def approx_gelu(x):
     return x*0.5*(1+approx_erf(x/math.sqrt(2)))
 
 
+#sign function is not supported in tflite
+#return tf.tanh(x*1e3)
+#return tf_sign(x)*x
 def get_angles(pos, i, d_model):
     angle_rates = 1 / np.power(10000, (2 * (i//2)) / np.float32(d_model))
     return pos * angle_rates
@@ -239,37 +239,12 @@ class ScaledDotProduct(tf.keras.layers.Layer):
         self.dense_v = Dense(self.d_model, inp_size=self.inp_size, name="value", use_conv=use_conv)
 
     def build(self, input_shape):
-        """
-        self.kernel_q = self.add_weight(self.name + "_kernel_q",shape=[self.inp_size,self.d_model],
-                initializer='random_normal',
-                trainable=True)
-        self.bias_q = self.add_weight(self.name + "_bias_q",shape=[self.d_model],
-                initializer='random_normal',
-                trainable=True)
-
-        self.kernel_k = self.add_weight(self.name + "_kernel_k",shape=[self.inp_size,self.d_model],
-                initializer='random_normal',
-                trainable=True)
-        self.bias_k = self.add_weight(self.name + "_bias_k",shape=[self.d_model],
-                initializer='random_normal',
-                trainable=True)
-
-        self.kernel_v = self.add_weight(self.name + "_kernel_v",shape=[self.inp_size,self.d_model],
-                initializer='random_normal',
-                trainable=True)
-        self.bias_v = self.add_weight(self.name + "_bias_v",shape=[self.d_model],
-                initializer='random_normal',
-                trainable=True)
-        """
+        pass
 
     def get_config(self):
         return {'d_model': self.d_model, 'name':self.name, 'activation':self.activation, 'inp_size':self.inp_size, 'use_conv':self.use_conv}
 
-
     def call(self, q, k, v, mask=None):
-        #q = tf.matmul(q, self.kernel_q) + self.bias_q
-        #k = tf.matmul(k, self.kernel_k) + self.bias_k
-        #v = tf.matmul(v, self.kernel_v) + self.bias_v
         q = self.dense_q(q)
         k = self.dense_k(k)
         v = self.dense_v(v)
@@ -282,43 +257,6 @@ class ScaledDotProduct(tf.keras.layers.Layer):
         attention_weights = self.softmax(scaled_attention_logits, axis=-1)
         output = tf.matmul(attention_weights, v)
         return  output
-
-class TPUAcceleratedMultiHeadedAttention(tf.keras.layers.Layer):
-    def __init__(self, num_heads, d_model, name=None):
-        super(TPUAcceleratedMultiHeadedAttention, self).__init__(name=name)
-        self.attention_heads = []
-        for i in range(num_heads):
-            sdp = ScaledConvolutionalDotProduct(d_model, name=self.name + 'scaled_dot_product' + str(i))
-            self.attention_heads.append(sdp)
-        self.num_heads = num_heads
-        self.relu = activations.get('relu')
-        self.d_model = d_model
-
-    def build(self, input_shape):
-        for head in self.attention_heads:
-            head.build(input_shape)
-        self.kernel = self.add_weight(self.name + "_kernel",shape=[self.d_model*self.num_heads,self.d_model],
-                initializer='random_normal',
-                trainable=True)
-        self.bias = self.add_weight(self.name + "_bias",shape=[self.d_model],
-                initializer='random_normal',
-                trainable=True)
-
-    def get_config(self):
-        return {'d_model': self.d_model, 'num_heads': self.num_heads, 'name':self.name}
-
-    def call(self, q, k, v, mask):
-        batch_size = tf.shape(q)[0]
-
-        attention_outputs = []
-        for head in self.attention_heads:
-            attention_outputs.append(head(q, k, v, mask))
-        x = attention_outputs[0]
-        if self.num_heads>1:
-            x = tf.keras.layers.concatenate(attention_outputs)
-        x = self.relu(x)
-        x = self.relu(tf.matmul(x, self.kernel) + self.bias)
-        return x
 
 class MultiHeadedAttention(tf.keras.layers.Layer):
     def __init__(self, num_heads, d_model, activation='gelu', name=None):
@@ -375,16 +313,7 @@ class BERTMultiHeadedAttention(tf.keras.layers.Layer):
         self.mha_ffn = Dense(self.d_model, inp_size=self.d_model, use_conv=self.use_conv, name=self.name + "attention_output")
 
     def build(self, input_shape):
-        #for head in self.attention_heads:
-            #head.build(input_shape)
-        """
-        self.kernel = self.add_weight(self.name + "attention_output_kernel",shape=[input_shape[-1],self.d_model],
-                initializer='random_normal',
-                trainable=True)
-        self.bias = self.add_weight(self.name + "attention_output_bias",shape=[self.d_model],
-                initializer='random_normal',
-                trainable=True)
-        """
+        pass
 
     def get_config(self):
         return {'d_model': self.d_model, 'num_heads': self.num_heads, 'use_conv':self.use_conv, 'name':self.name, 'activation':self.activation, 'rate':self.rate}
@@ -396,7 +325,6 @@ class BERTMultiHeadedAttention(tf.keras.layers.Layer):
         x = attention_outputs[0]
         if self.num_heads>1:
             x = tf.keras.layers.concatenate(attention_outputs)
-        #x = tf.matmul(x, self.kernel) + self.bias
         x = self.mha_ffn(x)
         x = self.dropout(x, training=training)
         return x
@@ -410,6 +338,8 @@ class Dense(tf.keras.layers.Layer):
         self.inp_size = inp_size
         self.activation = activation
         self.act_out = activations.get(activation)
+        if activation=="gelu":
+            self.act_out=approx_gelu
 
     def get_config(self):
         return {
@@ -461,6 +391,76 @@ class Dense(tf.keras.layers.Layer):
         return out
 
 
+class PartitionLayer(tf.keras.layers.Layer):
+    def __init__(self, output_size, input_size, num_layers=1, partition_output=True, rank=2, activation=None, name=None):
+        super(PartitionLayer, self).__init__(name=name)
+        if partition_output:
+          assert output_size%num_layers==0
+        else:
+          assert input_size%num_layers==0
+        self.num_layers = num_layers
+        self.output_size = output_size
+        self.rank = rank
+        self.input_size=input_size
+        self.activation = activation
+        self.partition_output = partition_output
+        self.fcs = []
+        for i in range(num_layers):
+          if partition_output:
+            self.fcs.append(Dense(int(output_size/num_layers), inp_size=input_size, activation=activation, use_conv=True))
+          else:
+            self.fcs.append(Dense(output_size, inp_size=int(input_size/num_layers), activation=activation, use_conv=True))
+
+    def build(self, input_shape):
+      pass
+
+    def get_config(self):
+        return {
+            'name':self.name}
+
+    def call(self, x):
+      if self.partition_output:
+        outputs = []
+        for i in range(self.num_layers):
+          outputs.append(self.fcs[i](x))
+        x = outputs[0]
+        if self.num_layers>1:
+            x = tf.keras.layers.concatenate(outputs)
+        return x
+      rank = self.rank
+      partition_size = int(self.input_size/self.num_layers)
+      if rank==2:
+        output = self.fcs[0](x[:,0:partition_size])
+        for i in range(1,self.num_layers):
+          output+=self.fcs[i](x[:,partition_size*(i):partition_size*(i+1)])
+        return output
+      elif rank==3:
+        output = self.fcs[0](x[:,:,0:partition_size])
+        for i in range(1,self.num_layers):
+          output+=self.fcs[i](x[:,:,partition_size*(i):partition_size*(i+1)])
+        return output
+      return x
+
+
+class PartitionEmbedding(tf.keras.layers.Layer):
+  def __init__(self, vocab_Size, emb_size, input_length=None, n_partitions=1, name=None):
+      super(PartitionEmbedding, self).__init__(name=name)
+      self.vocab_size = vocab_Size
+      self.emb_size = emb_size
+      self.input_length = input_length
+      self.n_partitions = n_partitions
+      self.partition_size = int(self.emb_size/n_partitions)
+      assert self.emb_size % n_partitions == 0
+      self.embeddings = [tf.keras.layers.Embedding(vocab_Size, self.partition_size, input_length=input_length) for i in range(n_partitions)]
+
+  def call(self, x):
+      outputs = []
+      for embedding in self.embeddings:
+          outputs.append(embedding(x))
+      x = outputs[0]
+      if self.n_partitions>1:
+          x = tf.keras.layers.concatenate(outputs)
+      return x
 
 
 class BertEmbedding(tf.keras.layers.Layer):
@@ -472,9 +472,13 @@ class BertEmbedding(tf.keras.layers.Layer):
         self.n_segments = n_segments
         self.d_model = d_model
 
-        self.word_embeddings = tf.keras.layers.Embedding(vocab_size, d_model, name="word_embeddings")
-        self.position_embedding = tf.keras.layers.Embedding(seq_len, d_model, name="position_embeddings")
-        self.type_embeddings = tf.keras.layers.Embedding(n_segments, d_model, name="type_embeddings")
+        #self.word_embeddings = tf.keras.layers.Embedding(vocab_size, d_model, name="word_embeddings")
+        #self.position_embedding = tf.keras.layers.Embedding(seq_len, d_model, name="position_embeddings")
+        #self.type_embeddings = tf.keras.layers.Embedding(n_segments, d_model, name="type_embeddings")
+        
+        self.word_embeddings = PartitionEmbedding(vocab_size, d_model, n_partitions=2, name="word_embeddings")
+        self.position_embedding = PartitionEmbedding(seq_len, d_model, n_partitions=2, name="word_embeddings")
+        self.type_embeddings = PartitionEmbedding(n_segments, d_model, n_partitions=2, name="word_embeddings")
         self.norm = tf.keras.layers.LayerNormalization(epsilon=1e-12, name="layer_normalization")
 
     def get_config(self):
@@ -565,12 +569,12 @@ class BertEncoder(tf.keras.layers.Layer):
     def __init__(self, num_heads, d_model, intermediate_size, rate=0.1, intermediate_partitions=1, activation='gelu', use_conv=False, name=None):
         super(BertEncoder, self).__init__(name=name)
 
+
         self.d_model = d_model
         self.num_heads = num_heads
         self.intermediate_size = intermediate_size
         self.rate = rate
         self.use_conv = use_conv
-        self.intermediate_partitions = intermediate_partitions
 
         self.mha = BERTMultiHeadedAttention(num_heads, d_model, activation=activation, use_conv=use_conv, name = "mha")
 
@@ -580,10 +584,15 @@ class BertEncoder(tf.keras.layers.Layer):
         self.dropout1 = tf.keras.layers.Dropout(rate)
         self.dropout2 = tf.keras.layers.Dropout(rate)
         self.activation = activation
-        self.use_partitions = (not self.intermediate_partitions==1)
 
-        self.dff = Dense(self.intermediate_size, inp_size=self.d_model, use_conv=use_conv, name=self.name + "/intermediate/")
+        #self.dff = PartitionLayer(self.intermediate_size, self.d_model, num_layers=12, activation=activation, name=self.name + "/intermediate/")#Dense(self.intermediate_size, inp_size=self.d_model, use_conv=use_conv, name=self.name + "/intermediate/")
+        #self.out_ffn = PartitionLayer(self.d_model, self.intermediate_size, partition_output=False, num_layers=3, rank=3, name=self.name + "/out/")
+        self.dff = Dense(self.intermediate_size, inp_size=self.d_model, use_conv=use_conv, activation=activation, name=self.name + "/out/")
         self.out_ffn = Dense(self.d_model, inp_size=self.intermediate_size, use_conv=use_conv, name=self.name + "/out/")
+
+
+        self.intermediate_partitions = 1
+        self.use_partitions=True
 
         self.activation1 = activations.get(activation)
         if activation == 'gelu':
@@ -607,10 +616,6 @@ class BertEncoder(tf.keras.layers.Layer):
 
         partition_size = int(self.intermediate_size / self.intermediate_partitions)
 
-        curr_dff = self.kernel_dff
-        curr_bias_dff = self.bias_dff
-        curr_out = self.kernel_out
-
         self.kernel_dff_part = []
         self.bias_dff_part = []
         self.kernel_out_part = []
@@ -624,16 +629,6 @@ class BertEncoder(tf.keras.layers.Layer):
             self.kernel_out_part.append(self.add_weight(self.name + "/kernel_out_partition_" + str(i) + "",shape=[partition_size,self.d_model],
                     initializer='random_normal',
                     trainable=True))
-
-        for i in range(self.intermediate_partitions):
-            temp_kernel_dff = curr_dff[:,i*partition_size:(i+1)*partition_size]
-            self.kernel_dff_part[i].assign(temp_kernel_dff)
-
-            temp_bias_dff = curr_bias_dff[i*partition_size:(i+1)*partition_size]
-            self.bias_dff_part[i].assign(temp_bias_dff)
-
-            temp_kernel_out = curr_out[i*partition_size:(i+1)*partition_size,:]
-            self.kernel_out_part[i].assign(temp_kernel_out)
 
     def build_standard(self):
         self.kernel_out = self.add_weight(self.name + "/kernel_out",shape=[self.intermediate_size,self.d_model],
@@ -662,8 +657,6 @@ class BertEncoder(tf.keras.layers.Layer):
         return ffn_output2
 
     def compute_ffn(self,x):
-        if not self.use_partitions:
-            return self.compute_ffn_standard(x)
         return self.compute_ffn_partition(x)
 
     def set_partitions(self, n_partitions):
@@ -677,15 +670,11 @@ class BertEncoder(tf.keras.layers.Layer):
         attn_output = self.mha(x, x, x, mask)
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(x + attn_output) # (batch_Size, seq_len, d_model)
-        #"""
-        #ffn_output1 = self.activation1(tf.matmul(out1, self.kernel_dff) + self.bias_dff)
-        ffn_output1 = self.activation1(self.dff(out1))
+        ffn_output1 = self.dff(out1)
         ffn_output2 = self.out_ffn(ffn_output1)
-        #ffn_output2 = tf.matmul(ffn_output1, self.kernel_out) + self.bias_out
-        #"""
-        #ffn_output2 = self.compute_ffn(out1)
         ffn_output3 = self.dropout2(ffn_output2, training=training)
         out2 = self.layernorm2(out1 + ffn_output3)
+        #out2 = ffn_output2
         return out2
 
 class IntLayerNorm(tf.keras.layers.Layer):

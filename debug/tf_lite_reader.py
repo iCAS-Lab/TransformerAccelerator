@@ -16,7 +16,7 @@ def get_methods(object, spacing=20):
               processFunc(str(getattr(object, method).__doc__)[0:90]))
     except Exception:
         print(method.ljust(spacing) + ' ' + ' getattr() failed')
-model_path = '/home/user/Documents/TransformerAccelerator/tflite_models/mrpc_test_vehicle_int8.tflite'
+model_path = '/home/user/Documents/TransformerAccelerator/detector.tflite'
 buf = open(model_path, 'rb').read()
 model = Model.GetRootAsModel(buf, 0)
 subgraph = model.Subgraphs(0)
@@ -57,12 +57,12 @@ for i in range(model.SubgraphsLength()):
         buffer = tensor.Buffer()
         raw = np.array(model.Buffers(buffer).DataAsNumpy())
         op = subgraph.Operators(j)
-        scale = quantizationParamas.ScaleAsNumpy()
-        zero_point = quantizationParamas.ZeroPointAsNumpy()
+        #scale = quantizationParamas.ScaleAsNumpy()
+        #zero_point = quantizationParamas.ZeroPointAsNumpy()
         #print(tensorOperation, tensor.IsVariable(), tensor.ShapeAsNumpy(), typeName, sep="\t")
         #print(tensorOperation, ">",end="")
         if "layer_0" in tensorName and not "batchnorm" in tensorName:
-            print(tensorName, typeName, scale[0], zero_point[0], raw.shape)
+            print(tensorName, typeName), #scale[0], zero_point[0], raw.shape)
 
 #print(get_methods(subgraph))
 #print(get_methods(model.Subgraphs(0).Tensors(0)))

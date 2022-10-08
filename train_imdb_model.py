@@ -90,6 +90,7 @@ converter.optimizations = [tf.lite.Optimize.DEFAULT]
 converter.representative_dataset = representative_dataset
 converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
 
+
 debugger = tf.lite.experimental.QuantizationDebugger(
     converter=converter, debug_dataset=representative_dataset)
 debugger.run()

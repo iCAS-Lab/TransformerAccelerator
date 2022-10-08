@@ -1,0 +1,95 @@
+NEW TEST
+Summary for 128 d_model
+success: 1   fail: 0
+Summary for 256 d_model
+success: 1   fail: 0
+Summary for 512 d_model
+success: 1   fail: 0
+Summary for 576 d_model
+success: 1   fail: 0
+Summary for 640 d_model
+success: 1   fail: 0
+Summary for 704 d_model
+success: 1   fail: 0
+Summary for 784 d_model
+success: 0   fail: 1
+Summary for 1024 d_model
+success: 1   fail: 0
+NEW TEST
+Summary for 128 d_model
+success: 10   fail: 0
+Summary for 256 d_model
+success: 10   fail: 0
+Summary for 512 d_model
+success: 10   fail: 0
+Summary for 576 d_model
+success: 10   fail: 0
+Summary for 640 d_model
+success: 10   fail: 0
+Summary for 704 d_model
+success: 5   fail: 5
+Summary for 784 d_model
+success: 3   fail: 7
+Summary for 1024 d_model
+success: 0   fail: 10
+NEW TEST
+Summary for 128 d_model
+success: 10   fail: 0
+Summary for 256 d_model
+success: 10   fail: 0
+Summary for 512 d_model
+success: 10   fail: 0
+Summary for 576 d_model
+success: 10   fail: 0
+Summary for 640 d_model
+success: 10   fail: 0
+Summary for 704 d_model
+success: 2   fail: 8
+NEW TEST
+NEW TEST
+NEW TEST
+Summary for 640 d_model
+success: 10   fail: 0
+Summary for 704 d_model
+success: 5   fail: 5
+Summary for 784 d_model
+success: 7   fail: 3
+Summary for 1024 d_model
+success: 3   fail: 7
+NEW TEST
+
+
+Summary for 64 d_model
+success: 100   fail: 0
+
+Summary for 128 d_model
+success: 100   fail: 0
+
+Summary for 256 d_model
+success: 100   fail: 0
+
+Summary for 512 d_model
+success: 100   fail: 0
+
+Summary for 576 d_model
+success: 100   fail: 0
+
+Summary for 640 d_model
+success: 100   fail: 0
+
+Summary for 704 d_model
+success: 30   fail: 70
+
+Summary for 784 d_model
+success: 36   fail: 64
+
+Summary for 1024 d_model
+success: 35   fail: 65
+
+Summary for 2048 d_model
+success: 100   fail: 0
+Summary for 3072 d_model
+success: 5   fail: 0
+
+Summary for 4096 d_model
+success: 5   fail: 0

@@ -2,12 +2,23 @@ import ConvertModel
 import TransformerModel
 import numpy as np
 import tensorflow as tf
+import pandas as pd
 
 def update_dict(original, changes):
     for key in changes.keys():
         if key in original.keys():
             original[key] = changes[key]
     return original
+
+def analyze_model(model):
+    dflist = []
+    for weight in model.weights:
+        totalSize = 1
+        for dim in weight.shape:
+            totalSize*=dim
+        dflist.append({"name":weight.name, "shape":weight.shape, "total_size":totalSize})
+    retDf = pd.DataFrame(dflist)
+    return retDf.sort_values(by="total_size")
 
 def partition_model(model, intermediate_partitions=1):
     for layer in model.layers:

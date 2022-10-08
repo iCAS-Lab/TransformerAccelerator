@@ -11,7 +11,7 @@ import EdgeTPUPrecompiler
 
 os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
-model_name = "uncased_L-12_H-512_A-8_untrained"
+model_name = "uncased_L-2_H-128_A-2"
 model_dir = "models/" + model_name
 n_partitions = 2
 epochs = 0
@@ -25,10 +25,13 @@ def fetchRawModel(batch_size=None):
     bert_encoder = ConvertModel.from_config(model_dir + "/bert_config.json", use_conv=True)
     #bert_encoder = ConvertModel.from_tf1_checkpoint(model_dir, use_conv=True)
     bert_classifier = ConvertModel.BERT_Classifier(bert_encoder, 2, use_conv=True)
+    #bert_classifier = bert_encoder
     return bert_classifier
 
 bert_classifier = fetchRawModel()
 bert_classifier.summary()
+
+print(EdgeTPUPrecompiler.analyze_model(bert_classifier).tail(n=50))
 
 glue, info = tfds.load('glue/mrpc',
                        with_info=True,
@@ -188,8 +191,8 @@ with open(quant_file, 'wb') as f:
 print("Float model in Mb:", os.path.getsize(float_file) / float(2**20))
 print("Quantized model in Mb:", os.path.getsize(quant_file) / float(2**20))
 
-#open("tflite_models/mrpc_test_vehicle_int8.tflite", "wb").write(quantized_tflite_model)
-#open("tflite_models/mrpc_test_vehicle_fp32.tflite", "wb").write(float_tflite_model)
+#open("tflite_models/bert_base_P1-12_P2-1_int8.tflite", "wb").write(quantized_tflite_model)
+#open("tflite_models/bert_base_P1-12_P2-1_fp32.tflite", "wb").write(float_tflite_model)
 
 open("tflite_models/mrpc_" + model_name + "_int8.tflite", "wb").write(quantized_tflite_model)
 open("tflite_models/mrpc_" + model_name + "_fp32.tflite", "wb").write(float_tflite_model)
