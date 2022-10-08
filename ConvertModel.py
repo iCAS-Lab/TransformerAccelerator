@@ -20,7 +20,7 @@ def BERT_Classifier(backbone_model, classes, use_conv=False):
     model = tf.keras.Model(inputs=backbone.input, outputs=x)
     return model
 
-def from_config(configPath, use_conv=False, intermediate_partitions=1):
+def from_config(configPath, use_conv=False, n_partitions=1):
     with open(configPath) as json_file:
         data = json.load(json_file)
     n_layers = data["num_hidden_layers"]
@@ -36,16 +36,16 @@ def from_config(configPath, use_conv=False, intermediate_partitions=1):
     seg = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_type_ids", ragged=False)
     mask = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_mask", ragged=False)
     custom_encoder = TransformerModel.BERT(n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size,
-        activation=activation, intermediate_partitions=intermediate_partitions, use_conv=use_conv, name="transformer")(x, seg, mask)
+        activation=activation, n_partitions=n_partitions, use_conv=use_conv, name="transformer")(x, seg, mask)
     encoder_model = tf.keras.Model(inputs=[x, seg, mask], outputs=[custom_encoder])
     return encoder_model
 
 def from_hub_encoder(hub_encoder, configPath, strategy=None):
     return ConvertModelFromHub.from_hub_encoder(hub_encoder, configPath, strategy=strategy)
 
-def from_tf1_checkpoint(model_dir, use_conv=False):
+def from_tf1_checkpoint(model_dir, use_conv=False, n_partitions=1):
     return ConvertFromTF1Checkpoint.from_tf1_checkpoint(
         os.path.join(model_dir, "bert_model.ckpt"),
         os.path.join(model_dir, "bert_config.json"),
-        use_conv=use_conv
+        use_conv=use_conv, n_partitions=n_partitions
     )

@@ -45,7 +45,7 @@ def load_checkpoint(file_name):
     }
     return state_dict
 
-def from_tf1_checkpoint(tf1_checkpoint_path, configPath, use_conv=False):
+def from_tf1_checkpoint(tf1_checkpoint_path, configPath, use_conv=False, n_partitions=1):
 
     tf1_checkpoint = load_checkpoint(tf1_checkpoint_path)
     global unusedValues
@@ -65,10 +65,14 @@ def from_tf1_checkpoint(tf1_checkpoint_path, configPath, use_conv=False):
     x = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_word_ids", ragged=False)
     seg = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_type_ids", ragged=False)
     mask = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_mask", ragged=False)
-    custom_encoder = TransformerModel.BERT(n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, activation=activation, use_conv=use_conv, name="transformer")(x, seg, mask)
+
+    custom_encoder = TransformerModel.BERT(n_layers, num_heads, vocab_size, seq_len,
+    n_segments, d_model, intermediate_size, activation=activation, use_conv=use_conv,
+    n_partitions=n_partitions, name="transformer")(x, seg, mask)
+
     encoder_model = tf.keras.Model(inputs=[x, seg, mask], outputs=[custom_encoder])
     encoder_model.compile()
-    inject_weights(tf1_checkpoint, encoder_model, n_layers, num_heads)
+    inject_weights(tf1_checkpoint, encoder_model, n_layers, num_heads, n_partitions=n_partitions)
     return encoder_model
 
 from tensorflow.keras.models import Model
@@ -115,6 +119,9 @@ def setWeightByName(model, name, inWeight, pseudoName):
         if name in weight.name:
             if len(weight.shape) > len(inWeight.shape):
                 inWeight = tf.expand_dims(inWeight, axis=0)
+            if not weight.shape==inWeight.shape:
+                print("INWEIGHT SHAPE:", inWeight.shape)
+                print("CURRWEIGHT SHAPE:", weight.shape)
             assert weight.shape==inWeight.shape
             tempName = weight.name
             model.weights[i].assign(inWeight)
@@ -124,13 +131,18 @@ def setWeightByName(model, name, inWeight, pseudoName):
     raise Exception("ModelConverter was unable to find layer: " + name + "\nDid you mean " + str(closestVal))
         
 
-def injectEmbeddings(fromModel, toModel):
-    cName, word_embeddings = getWeightByName(fromModel, "word_embeddings")
-    setWeightByName(toModel, "word_embeddings", word_embeddings, cName)
-    cName, position_embedding = getWeightByName(fromModel, "position_embedding")
-    setWeightByName(toModel, "position_embedding", position_embedding, cName)
-    cName, type_embeddings = getWeightByName(fromModel, "type_embeddings")
-    setWeightByName(toModel, "type_embeddings", type_embeddings, cName)
+def injectEmbeddings(fromModel, toModel, n_partitions=1):
+    cName1, word_embeddings = getWeightByName(fromModel, "word_embeddings")
+    cName2, position_embedding = getWeightByName(fromModel, "position_embedding")
+    cName3, type_embeddings = getWeightByName(fromModel, "type_embeddings")
+    partition_size = int(word_embeddings.shape[-1]/n_partitions)
+    for i in range(n_partitions):
+        temp_word_embeddings = word_embeddings[:,i*partition_size:(i+1)*partition_size]
+        temp_position_embedding = position_embedding[:,i*partition_size:(i+1)*partition_size]
+        temp_type_embeddings = type_embeddings[:,i*partition_size:(i+1)*partition_size]
+        setWeightByName(toModel, "word_embeddings/partition" + str(i), temp_word_embeddings, cName1)
+        setWeightByName(toModel, "position_embeddings/partition" + str(i), temp_position_embedding, cName2)
+        setWeightByName(toModel, "type_embeddings/partition" + str(i), temp_type_embeddings, cName3)
 
     cName, layer_norm_gamma = getWeightByName(fromModel, "embeddings/LayerNorm/gamma")
     setWeightByName(toModel, "transformer/bert_embedding/layer_normalization/gamma", layer_norm_gamma, cName)
@@ -138,7 +150,7 @@ def injectEmbeddings(fromModel, toModel):
     setWeightByName(toModel, "transformer/bert_embedding/layer_normalization/beta", layer_norm_beta, cName)
     print("Successfuly injected embedding values")
 
-def injectMHA(fromModel, toModel, num_heads, layer=0):
+def injectMHA(fromModel, toModel, num_heads, layer=0, n_partitions=1):
     n1, attn_layer_norm_gamma = getWeightByName(fromModel, "layer_" + str(layer) + "/attention/output/LayerNorm/gamma")
     n2, attn_layer_norm_beta = getWeightByName(fromModel, "layer_" + str(layer) + "/attention/output/LayerNorm/beta")
     n3, out_layer_norm_gamma = getWeightByName(fromModel, "layer_" + str(layer) + "/output/LayerNorm/gamma")
@@ -150,8 +162,13 @@ def injectMHA(fromModel, toModel, num_heads, layer=0):
 
     n1,intermediate_kernel = getWeightByName(fromModel, "layer_" + str(layer) + "/intermediate/dense/kernel")
     n2,intermediate_bias = getWeightByName(fromModel, "layer_" + str(layer) + "/intermediate/dense/bias")
-    setWeightByName(toModel, "layer_" + str(layer) + "/intermediate/kernel", intermediate_kernel,n1)
-    setWeightByName(toModel, "layer_" + str(layer) + "/intermediate/bias", intermediate_bias,n2)
+    partition_size = int(intermediate_kernel.shape[-1] / n_partitions)
+    for i in range(n_partitions):
+        temp_intermediate = intermediate_kernel[:,i*partition_size:(i+1)*partition_size]
+        temp_intermediate_bias = intermediate_bias[i*partition_size:(i+1)*partition_size]
+        setWeightByName(toModel, "layer_" + str(layer) + "/intermediate/partition_out" + str(i) + "/kernel", temp_intermediate,n1)
+        setWeightByName(toModel, "layer_" + str(layer) + "/intermediate/partition_out" + str(i) + "/bias", temp_intermediate_bias,n2)
+
     
 
     n1,output_kernel = getWeightByName(fromModel, "layer_" + str(layer) + "/output/dense/kernel")
@@ -198,15 +215,15 @@ def injectMHA(fromModel, toModel, num_heads, layer=0):
     
 
 
-def inject_weights(fromModel, toModel, n_layers, num_heads):
+def inject_weights(fromModel, toModel, n_layers, num_heads, n_partitions=1):
     global mappedWeights
     global outputMap
     mappedWeights = []
     for weight in toModel.weights:
         mappedWeights.append(weight.name)
-    injectEmbeddings(fromModel, toModel)
+    injectEmbeddings(fromModel, toModel, n_partitions=n_partitions)
     for layer in range(n_layers):
-       injectMHA(fromModel, toModel, num_heads, layer=layer)
+       injectMHA(fromModel, toModel, num_heads, layer=layer, n_partitions=n_partitions)
 
     n1,pooler_kernel = getWeightByName(fromModel, "pooler/dense/kernel")
     n2,pooler_bias = getWeightByName(fromModel, "pooler/dense/bias")

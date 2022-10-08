@@ -5,16 +5,13 @@ import tensorflow as tf
 import tensorflow_models as tfm
 import tensorflow_datasets as tfds
 
-import TransformerQuantization
 import ConvertModel
-import EdgeTPUPrecompiler
 
-os.environ["CUDA_VISIBLE_DEVICES"]="0"
+os.environ["CUDA_VISIBLE_DEVICES"]="2"
 
-model_name = "uncased_L-2_H-128_A-2"
+model_name = "uncased_L-12_H-768_A-12"
 model_dir = "models/" + model_name
-n_partitions = 2
-epochs = 0
+epochs = 5
 
 #strategy = tf.distribute.MirroredStrategy()#devices=["/gpu:0", "/gpu:1", "/gpu:2"])
 strategy = tf.distribute.get_strategy()
@@ -22,9 +19,9 @@ BATCH_SIZE_PER_REPLICA = 16
 batch_size = BATCH_SIZE_PER_REPLICA * strategy.num_replicas_in_sync
 
 def fetchRawModel(batch_size=None):
-    bert_encoder = ConvertModel.from_config(model_dir + "/bert_config.json", use_conv=True)
-    #bert_encoder = ConvertModel.from_tf1_checkpoint(model_dir, use_conv=True)
-    bert_classifier = ConvertModel.BERT_Classifier(bert_encoder, 2, use_conv=True)
+    #bert_encoder = ConvertModel.from_config(model_dir + "/bert_config.json", use_conv=True, n_partitions=2)
+    bert_encoder = ConvertModel.from_tf1_checkpoint(model_dir, use_conv=False, n_partitions=2)
+    bert_classifier = ConvertModel.BERT_Classifier(bert_encoder, 2, use_conv=False)
     #bert_classifier = bert_encoder
     return bert_classifier
 
@@ -108,33 +105,6 @@ bert_classifier.fit(
 
 print("VAL1")
 bert_classifier.evaluate(glue_validation)
-"""
-bert_classifier = EdgeTPUPrecompiler.partition_model(bert_classifier, intermediate_partitions=n_partitions)
-
-linear_decay = tf.keras.optimizers.schedules.PolynomialDecay(
-    initial_learning_rate=initial_learning_rate,
-    end_learning_rate=0,
-    decay_steps=num_train_steps)
-
-warmup_schedule = tfm.optimization.lr_schedule.LinearWarmup(
-    warmup_learning_rate = 0,
-    after_warmup_lr_sched = linear_decay,
-    warmup_steps = warmup_steps
-)
-optimizer = tf.keras.optimizers.experimental.Adam(
-    learning_rate = warmup_schedule)
-
-metrics = [tf.keras.metrics.SparseCategoricalAccuracy('accuracy', dtype=tf.float32)]
-loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-
-bert_classifier.compile(
-    optimizer=optimizer,
-    loss=loss,
-    metrics=metrics)
-
-print("VAL2")
-bert_classifier.evaluate(glue_validation)
-"""
 glue, info = tfds.load('glue/mrpc',
                        with_info=True,
                        batch_size=1)
@@ -194,6 +164,6 @@ print("Quantized model in Mb:", os.path.getsize(quant_file) / float(2**20))
 #open("tflite_models/bert_base_P1-12_P2-1_int8.tflite", "wb").write(quantized_tflite_model)
 #open("tflite_models/bert_base_P1-12_P2-1_fp32.tflite", "wb").write(float_tflite_model)
 
-open("tflite_models/mrpc_" + model_name + "_int8.tflite", "wb").write(quantized_tflite_model)
-open("tflite_models/mrpc_" + model_name + "_fp32.tflite", "wb").write(float_tflite_model)
+open("tflite_models/mrpc_" + model_name + "_conv_int8.tflite", "wb").write(quantized_tflite_model)
+open("tflite_models/mrpc_" + model_name + "_conv_fp32.tflite", "wb").write(float_tflite_model)
 #"""

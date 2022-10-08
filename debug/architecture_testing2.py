@@ -115,7 +115,7 @@ if EMB_SIZE in SWAP_DICT.keys():
 n_samples = 1
 
 inp = tf.keras.Input(shape=(SEQUENCE_LENGTH,), dtype=tf.float32, name="encoder_input", ragged=False)
-embedding = PartitionEmbedding(VOCAB_SIZE+1, 768, n_partitions=2)(inp)
+embedding = PartitionEmbedding(VOCAB_SIZE+1, 768, n_partitions=1)(inp)
 x = TransformerModel.Dense(D_MODEL, inp_size=768, use_conv=True)(embedding)
 x = TransformerModel.Dense(EMB_SIZE, inp_size=D_MODEL, use_conv=True)(x)
 x = x[:,0,:]

@@ -31,10 +31,10 @@ erf_c = 1
 
 #abs function is not supported on edge tpu
 def tf_abs(x):
-    return tf.math.abs(x)
+    return tf_sign(x)*x
 
 def tf_sign(x):
-    return tf.math.sign(x)
+    return tf.tanh(x*1e3)
 
 def approx_erf(x):
     return tf_sign(x)*(erf_a * (tf.math.minimum(tf_abs(x), -erf_b)+erf_b)**2 + erf_c)
@@ -392,7 +392,7 @@ class Dense(tf.keras.layers.Layer):
 
 
 class PartitionLayer(tf.keras.layers.Layer):
-    def __init__(self, output_size, input_size, num_layers=1, partition_output=True, rank=2, activation=None, name=None):
+    def __init__(self, output_size, input_size, num_layers=1, partition_output=True, rank=2, use_conv=False, activation=None, name=None):
         super(PartitionLayer, self).__init__(name=name)
         if partition_output:
           assert output_size%num_layers==0
@@ -401,22 +401,25 @@ class PartitionLayer(tf.keras.layers.Layer):
         self.num_layers = num_layers
         self.output_size = output_size
         self.rank = rank
+        self.use_conv = use_conv
         self.input_size=input_size
         self.activation = activation
         self.partition_output = partition_output
         self.fcs = []
         for i in range(num_layers):
           if partition_output:
-            self.fcs.append(Dense(int(output_size/num_layers), inp_size=input_size, activation=activation, use_conv=True))
+            self.fcs.append(Dense(int(output_size/num_layers), inp_size=input_size, activation=activation, use_conv=use_conv, name="partition_out" + str(i)))
           else:
-            self.fcs.append(Dense(output_size, inp_size=int(input_size/num_layers), activation=activation, use_conv=True))
+            self.fcs.append(Dense(output_size, inp_size=int(input_size/num_layers), activation=activation, use_conv=use_conv, name=str(i)))
 
     def build(self, input_shape):
       pass
 
     def get_config(self):
         return {
-            'name':self.name}
+            'name':self.name,
+            'use_conv':self.use_conv
+            }
 
     def call(self, x):
       if self.partition_output:
@@ -443,15 +446,14 @@ class PartitionLayer(tf.keras.layers.Layer):
 
 
 class PartitionEmbedding(tf.keras.layers.Layer):
-  def __init__(self, vocab_Size, emb_size, input_length=None, n_partitions=1, name=None):
+  def __init__(self, vocab_Size, emb_size, n_partitions=1, name=None):
       super(PartitionEmbedding, self).__init__(name=name)
       self.vocab_size = vocab_Size
       self.emb_size = emb_size
-      self.input_length = input_length
       self.n_partitions = n_partitions
       self.partition_size = int(self.emb_size/n_partitions)
       assert self.emb_size % n_partitions == 0
-      self.embeddings = [tf.keras.layers.Embedding(vocab_Size, self.partition_size, input_length=input_length) for i in range(n_partitions)]
+      self.embeddings = [tf.keras.layers.Embedding(vocab_Size, self.partition_size, name="partition" + str(i)) for i in range(n_partitions)]
 
   def call(self, x):
       outputs = []
@@ -464,21 +466,22 @@ class PartitionEmbedding(tf.keras.layers.Layer):
 
 
 class BertEmbedding(tf.keras.layers.Layer):
-    def __init__(self, vocab_size, seq_len, n_segments, d_model, name=None):
+    def __init__(self, vocab_size, seq_len, n_segments, d_model, n_partitions=1, name=None):
         super(BertEmbedding, self).__init__(name=name)
 
         self.vocab_size = vocab_size
         self.seq_len = seq_len
         self.n_segments = n_segments
         self.d_model = d_model
+        self.n_partitions = n_partitions
 
         #self.word_embeddings = tf.keras.layers.Embedding(vocab_size, d_model, name="word_embeddings")
         #self.position_embedding = tf.keras.layers.Embedding(seq_len, d_model, name="position_embeddings")
         #self.type_embeddings = tf.keras.layers.Embedding(n_segments, d_model, name="type_embeddings")
         
-        self.word_embeddings = PartitionEmbedding(vocab_size, d_model, n_partitions=2, name="word_embeddings")
-        self.position_embedding = PartitionEmbedding(seq_len, d_model, n_partitions=2, name="word_embeddings")
-        self.type_embeddings = PartitionEmbedding(n_segments, d_model, n_partitions=2, name="word_embeddings")
+        self.word_embeddings = PartitionEmbedding(vocab_size, d_model, n_partitions=n_partitions, name="word_embeddings")
+        self.position_embedding = PartitionEmbedding(seq_len, d_model, n_partitions=n_partitions, name="position_embeddings")
+        self.type_embeddings = PartitionEmbedding(n_segments, d_model, n_partitions=n_partitions, name="type_embeddings")
         self.norm = tf.keras.layers.LayerNormalization(epsilon=1e-12, name="layer_normalization")
 
     def get_config(self):
@@ -487,6 +490,7 @@ class BertEmbedding(tf.keras.layers.Layer):
             'seq_len': self.seq_len,
             'n_segments':self.n_segments,
             'd_model':self.d_model,
+            'n_partitions':self.n_partitions,
             'name':self.name
             }
 
@@ -503,7 +507,7 @@ class BertEmbedding(tf.keras.layers.Layer):
         return self.norm(embedding)
 
 class BERT(tf.keras.layers.Layer):
-    def __init__(self, n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, rate=0.1, intermediate_partitions=1, use_conv=False, activation='gelu', name=None):
+    def __init__(self, n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, rate=0.1, use_conv=False, n_partitions=1, activation='gelu', name=None):
         super(BERT, self).__init__(name=name)
         self.n_layers = n_layers
         self.num_heads = num_heads
@@ -512,12 +516,12 @@ class BERT(tf.keras.layers.Layer):
         self.n_segments = n_segments
         self.use_conv = use_conv
         self.d_model = d_model
-        self.intermediate_partitions = intermediate_partitions
         self.intermediate_size = intermediate_size
+        self.n_partitions = n_partitions
 
 
-        self.embedding = BertEmbedding(vocab_size, seq_len, n_segments, d_model)
-        self.enc_layers = [BertEncoder(num_heads, d_model, intermediate_size, rate=rate, intermediate_partitions=intermediate_partitions, activation=activation, use_conv=use_conv, name="layer_" + str(i)) 
+        self.embedding = BertEmbedding(vocab_size, seq_len, n_segments, d_model, n_partitions=n_partitions)
+        self.enc_layers = [BertEncoder(num_heads, d_model, intermediate_size, rate=rate, n_partitions=n_partitions, activation=activation, use_conv=use_conv, name="layer_" + str(i)) 
                         for i in range(n_layers)]
 
         self.activation = activation
@@ -539,18 +543,10 @@ class BERT(tf.keras.layers.Layer):
             'd_model':self.d_model,
             'intermediate_size':self.intermediate_size,
             'activation':self.activation,
-            'intermediate_partitions':self.intermediate_partitions
+            'n_partitions':self.n_partitions
             }
     def build(self, input_shape):
         pass
-
-    def set_partitions(self,n_partitions):
-        assert self.intermediate_partitions==1
-
-        self.intermediate_partitions = n_partitions
-        self.use_partitions = True
-        for enc in self.enc_layers:
-            enc.set_partitions(n_partitions)
 
     def call(self, x, seg, mask, training=True):
         mask = tf.expand_dims(mask, axis=1)
@@ -560,13 +556,12 @@ class BERT(tf.keras.layers.Layer):
         for layer in self.enc_layers:
             x = layer(x, mask)
         x = x[:,0]
-        #x = self.act_out(tf.matmul(x, self.pooler_transform) + self.pooler_transform_bias)
         x = self.act_out(self.pooler_ffn(x))
         return x
         #return {"pooled_output":x}
 
 class BertEncoder(tf.keras.layers.Layer):
-    def __init__(self, num_heads, d_model, intermediate_size, rate=0.1, intermediate_partitions=1, activation='gelu', use_conv=False, name=None):
+    def __init__(self, num_heads, d_model, intermediate_size, rate=0.1, n_partitions=1, activation='gelu', use_conv=False, name=None):
         super(BertEncoder, self).__init__(name=name)
 
 
@@ -585,9 +580,9 @@ class BertEncoder(tf.keras.layers.Layer):
         self.dropout2 = tf.keras.layers.Dropout(rate)
         self.activation = activation
 
-        #self.dff = PartitionLayer(self.intermediate_size, self.d_model, num_layers=12, activation=activation, name=self.name + "/intermediate/")#Dense(self.intermediate_size, inp_size=self.d_model, use_conv=use_conv, name=self.name + "/intermediate/")
-        #self.out_ffn = PartitionLayer(self.d_model, self.intermediate_size, partition_output=False, num_layers=3, rank=3, name=self.name + "/out/")
-        self.dff = Dense(self.intermediate_size, inp_size=self.d_model, use_conv=use_conv, activation=activation, name=self.name + "/out/")
+        self.dff = PartitionLayer(self.intermediate_size, self.d_model, num_layers=n_partitions, activation=activation, use_conv=use_conv, name="intermediate")#Dense(self.intermediate_size, inp_size=self.d_model, use_conv=use_conv, name=self.name + "/intermediate/")
+        #self.out_ffn = PartitionLayer(self.d_model, self.intermediate_size, partition_output=False, num_layers=4, rank=3, name=self.name + "/out/")
+        #self.dff = Dense(self.intermediate_size, inp_size=self.d_model, use_conv=use_conv, activation=activation, name=self.name + "/out/")
         self.out_ffn = Dense(self.d_model, inp_size=self.intermediate_size, use_conv=use_conv, name=self.name + "/out/")
 
 
@@ -608,63 +603,11 @@ class BertEncoder(tf.keras.layers.Layer):
             'use_conv':self.use_conv,
             'name':self.name,
             'activation':self.activation,
-            'intermediate_partitions':self.intermediate_partitions
+            'n_partitions':self.n_partitions
             }
-
-    def build_partitions(self):
-        assert self.intermediate_size % self.intermediate_partitions == 0
-
-        partition_size = int(self.intermediate_size / self.intermediate_partitions)
-
-        self.kernel_dff_part = []
-        self.bias_dff_part = []
-        self.kernel_out_part = []
-        for i in range(self.intermediate_partitions):
-            self.kernel_dff_part.append(self.add_weight(self.name + "/intermediate_partition_" + str(i) + "/kernel",shape=[self.d_model,partition_size],
-                    initializer='random_normal',
-                    trainable=True))
-            self.bias_dff_part.append(self.add_weight(self.name + "/intermediate_partition_" + str(i) + "/bias",shape=[partition_size],
-                    initializer='random_normal',
-                    trainable=True))
-            self.kernel_out_part.append(self.add_weight(self.name + "/kernel_out_partition_" + str(i) + "",shape=[partition_size,self.d_model],
-                    initializer='random_normal',
-                    trainable=True))
-
-    def build_standard(self):
-        self.kernel_out = self.add_weight(self.name + "/kernel_out",shape=[self.intermediate_size,self.d_model],
-                initializer='random_normal',
-                trainable=True)
-
-
 
     def build(self, input_shape):
         pass
-
-    def compute_ffn_partition(self,x):
-        ffn_outputs = []
-        for i in range(self.intermediate_partitions):
-            ffn_output1 = self.activation1(tf.matmul(x, self.kernel_dff_part[i]) + self.bias_dff_part[i])
-            ffn_outputs.append(ffn_output1)
-        ffn_output2 = tf.matmul(ffn_outputs[0], self.kernel_out_part[0])
-        for i in range(1,self.intermediate_partitions):
-            ffn_output2 += tf.matmul(ffn_outputs[i], self.kernel_out_part[i])
-        ffn_output2 = ffn_output2 + self.bias_out
-        return ffn_output2
-
-    def compute_ffn_standard(self,x):
-        ffn_output1 = self.activation1(tf.matmul(x, self.kernel_dff) + self.bias_dff)
-        ffn_output2 = tf.matmul(ffn_output1, self.kernel_out) + self.bias_out
-        return ffn_output2
-
-    def compute_ffn(self,x):
-        return self.compute_ffn_partition(x)
-
-    def set_partitions(self, n_partitions):
-        assert self.intermediate_partitions==1
-
-        self.intermediate_partitions = n_partitions
-        self.use_partitions = True
-        self.build_partitions()
 
     def call(self, x, mask, training=True):
         attn_output = self.mha(x, x, x, mask)

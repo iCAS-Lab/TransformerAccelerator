@@ -13,3 +13,6 @@ aclImdb/
 .ipynb_checkpoints/
 debugger_results/
 tflite_models/
+partitioned_models/
+use_conv_models/
+partitioned_no_embedding/
