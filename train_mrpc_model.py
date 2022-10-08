@@ -28,8 +28,6 @@ def fetchRawModel(batch_size=None):
 bert_classifier = fetchRawModel()
 bert_classifier.summary()
 
-print(EdgeTPUPrecompiler.analyze_model(bert_classifier).tail(n=50))
-
 glue, info = tfds.load('glue/mrpc',
                        with_info=True,
                        batch_size=batch_size)
