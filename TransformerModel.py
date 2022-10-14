@@ -21,6 +21,13 @@ import math
 LastValueQuantizer = tfmot.quantization.keras.quantizers.LastValueQuantizer
 MovingAverageQuantizer = tfmot.quantization.keras.quantizers.MovingAverageQuantizer
 
+DEFAULT_PARTITION_CONFIG = {
+    "intermediate_partitions":1,
+    "fc_out_partitions":1,
+    "embedding_partitions":1,
+    "use_conv":False
+}
+
 def relu(x):
     y = tf.constant([0.])
     return tf.math.maximum(x, y)
@@ -223,8 +230,10 @@ class ScaledConvolutionalDotProduct(tf.keras.layers.Layer):
         return output
 
 class ScaledDotProduct(tf.keras.layers.Layer):
-    def __init__(self, inp_size, d_model, activation='gelu', use_conv=False, name=None):
+    def __init__(self, inp_size, d_model, activation='gelu', partition_config=None, name=None):
         super(ScaledDotProduct, self).__init__(name=name)
+        if partition_config==None:
+            partition_config=DEFAULT_PARTITION_CONFIG
         self.d_model = d_model
         self.activation = activation
         self.inp_size = inp_size
@@ -232,6 +241,7 @@ class ScaledDotProduct(tf.keras.layers.Layer):
         self.key_activation = activations.get(activation)
         self.value_activation = activations.get(activation)
         self.softmax = activations.get('softmax')
+        use_conv = partition_config["use_conv"]
         self.use_conv = use_conv
 
         self.dense_q = Dense(self.d_model, inp_size=self.inp_size, name="query", use_conv=use_conv)
@@ -297,12 +307,14 @@ class MultiHeadedAttention(tf.keras.layers.Layer):
 
 
 class BERTMultiHeadedAttention(tf.keras.layers.Layer):
-    def __init__(self, num_heads, d_model, rate=0.1, activation='gelu', use_conv=False, name=None):
+    def __init__(self, num_heads, d_model, rate=0.1, partition_config=None, activation='gelu', name=None):
         super(BERTMultiHeadedAttention, self).__init__(name=name)
+        if partition_config==None:
+            partition_config=DEFAULT_PARTITION_CONFIG
         self.attention_heads = []
-        self.use_conv = use_conv
+        self.use_conv = partition_config["use_conv"]
         for i in range(num_heads):
-            sdp = ScaledDotProduct(d_model, int(d_model/num_heads), use_conv=use_conv, name=self.name + 'sdp_' + str(i))
+            sdp = ScaledDotProduct(d_model, int(d_model/num_heads), partition_config=partition_config, name=self.name + 'sdp_' + str(i))
             self.attention_heads.append(sdp)
         self.num_heads = num_heads
         self.rate = rate
@@ -376,6 +388,7 @@ class Dense(tf.keras.layers.Layer):
             nn_ops.convolution_v2,
             strides=list(conv_utils.normalize_tuple(1, 1, 'strides')),
             name='conv1d')
+        print("Actual:",self.inp_size,self.size)
     
     def call(self, x):
         if not self.use_conv:
@@ -392,7 +405,7 @@ class Dense(tf.keras.layers.Layer):
 
 
 class PartitionLayer(tf.keras.layers.Layer):
-    def __init__(self, output_size, input_size, num_layers=1, partition_output=True, rank=2, use_conv=False, activation=None, name=None):
+    def __init__(self, output_size, input_size, num_layers=1, partition_output=True, rank=2, use_conv=False, use_bias=True, activation=None, name=None):
         super(PartitionLayer, self).__init__(name=name)
         if partition_output:
           assert output_size%num_layers==0
@@ -404,16 +417,20 @@ class PartitionLayer(tf.keras.layers.Layer):
         self.use_conv = use_conv
         self.input_size=input_size
         self.activation = activation
+        self.use_bias = use_bias
         self.partition_output = partition_output
         self.fcs = []
         for i in range(num_layers):
           if partition_output:
             self.fcs.append(Dense(int(output_size/num_layers), inp_size=input_size, activation=activation, use_conv=use_conv, name="partition_out" + str(i)))
           else:
-            self.fcs.append(Dense(output_size, inp_size=int(input_size/num_layers), activation=activation, use_conv=use_conv, name=str(i)))
+            self.fcs.append(Dense(output_size, inp_size=int(input_size/num_layers), activation=activation, use_conv=use_conv, use_bias=False, name=str(i)))
 
     def build(self, input_shape):
-      pass
+      if self.use_bias and not self.partition_output:
+        self.bias = self.add_weight("bias",shape=[self.output_size],
+            initializer='random_normal',
+            trainable=True)
 
     def get_config(self):
         return {
@@ -436,11 +453,15 @@ class PartitionLayer(tf.keras.layers.Layer):
         output = self.fcs[0](x[:,0:partition_size])
         for i in range(1,self.num_layers):
           output+=self.fcs[i](x[:,partition_size*(i):partition_size*(i+1)])
+        if self.use_bias:
+            output+=self.bias
         return output
       elif rank==3:
         output = self.fcs[0](x[:,:,0:partition_size])
         for i in range(1,self.num_layers):
           output+=self.fcs[i](x[:,:,partition_size*(i):partition_size*(i+1)])
+        if self.use_bias:
+          output+=self.bias
         return output
       return x
 
@@ -475,6 +496,7 @@ class BertEmbedding(tf.keras.layers.Layer):
         self.d_model = d_model
         self.n_partitions = n_partitions
 
+
         #self.word_embeddings = tf.keras.layers.Embedding(vocab_size, d_model, name="word_embeddings")
         #self.position_embedding = tf.keras.layers.Embedding(seq_len, d_model, name="position_embeddings")
         #self.type_embeddings = tf.keras.layers.Embedding(n_segments, d_model, name="type_embeddings")
@@ -507,21 +529,25 @@ class BertEmbedding(tf.keras.layers.Layer):
         return self.norm(embedding)
 
 class BERT(tf.keras.layers.Layer):
-    def __init__(self, n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, rate=0.1, use_conv=False, n_partitions=1, activation='gelu', name=None):
+    def __init__(self, n_layers, num_heads, vocab_size, seq_len, n_segments, d_model, intermediate_size, rate=0.1, partition_config=None, activation='gelu', name=None):
         super(BERT, self).__init__(name=name)
+        if partition_config==None:
+            partition_config=DEFAULT_PARTITION_CONFIG
         self.n_layers = n_layers
         self.num_heads = num_heads
         self.vocab_size = vocab_size
         self.seq_len = seq_len
         self.n_segments = n_segments
-        self.use_conv = use_conv
+        self.use_conv = partition_config["use_conv"]
         self.d_model = d_model
         self.intermediate_size = intermediate_size
-        self.n_partitions = n_partitions
+        self.n_partitions = partition_config["intermediate_partitions"]
+
+        embedding_partitions = partition_config["embedding_partitions"]
 
 
-        self.embedding = BertEmbedding(vocab_size, seq_len, n_segments, d_model, n_partitions=n_partitions)
-        self.enc_layers = [BertEncoder(num_heads, d_model, intermediate_size, rate=rate, n_partitions=n_partitions, activation=activation, use_conv=use_conv, name="layer_" + str(i)) 
+        self.embedding = BertEmbedding(vocab_size, seq_len, n_segments, d_model, n_partitions=embedding_partitions)
+        self.enc_layers = [BertEncoder(num_heads, d_model, intermediate_size, rate=rate, activation=activation, partition_config=partition_config, name="layer_" + str(i)) 
                         for i in range(n_layers)]
 
         self.activation = activation
@@ -529,7 +555,7 @@ class BERT(tf.keras.layers.Layer):
         if activation == 'gelu':
             self.act_out = approx_gelu
 
-        self.pooler_ffn = Dense(self.d_model, inp_size=self.d_model, use_conv=use_conv, name = self.name + "pooler_transform")
+        self.pooler_ffn = Dense(self.d_model, inp_size=self.d_model, use_conv=self.use_conv, name = self.name + "pooler_transform")
 
     def get_config(self):
         return {
@@ -561,17 +587,18 @@ class BERT(tf.keras.layers.Layer):
         #return {"pooled_output":x}
 
 class BertEncoder(tf.keras.layers.Layer):
-    def __init__(self, num_heads, d_model, intermediate_size, rate=0.1, n_partitions=1, activation='gelu', use_conv=False, name=None):
+    def __init__(self, num_heads, d_model, intermediate_size, rate=0.1, activation='gelu', partition_config=None, name=None):
         super(BertEncoder, self).__init__(name=name)
-
+        if partition_config==None:
+            partition_config=DEFAULT_PARTITION_CONFIG
 
         self.d_model = d_model
         self.num_heads = num_heads
         self.intermediate_size = intermediate_size
         self.rate = rate
-        self.use_conv = use_conv
+        self.use_conv = partition_config["use_conv"]
 
-        self.mha = BERTMultiHeadedAttention(num_heads, d_model, activation=activation, use_conv=use_conv, name = "mha")
+        self.mha = BERTMultiHeadedAttention(num_heads, d_model, activation=activation, partition_config=partition_config, name = "mha")
 
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-12, name="attention_layer_norm")
         self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-12, name="output_layer_norm")
@@ -580,10 +607,10 @@ class BertEncoder(tf.keras.layers.Layer):
         self.dropout2 = tf.keras.layers.Dropout(rate)
         self.activation = activation
 
-        self.dff = PartitionLayer(self.intermediate_size, self.d_model, num_layers=n_partitions, activation=activation, use_conv=use_conv, name="intermediate")#Dense(self.intermediate_size, inp_size=self.d_model, use_conv=use_conv, name=self.name + "/intermediate/")
-        #self.out_ffn = PartitionLayer(self.d_model, self.intermediate_size, partition_output=False, num_layers=4, rank=3, name=self.name + "/out/")
+        self.dff = PartitionLayer(self.intermediate_size, self.d_model, num_layers=partition_config["intermediate_partitions"], activation=activation, use_conv=partition_config["use_conv"], name="intermediate")#Dense(self.intermediate_size, inp_size=self.d_model, use_conv=use_conv, name=self.name + "/intermediate/")
+        self.out_ffn = PartitionLayer(self.d_model, self.intermediate_size, partition_output=False, num_layers=partition_config["fc_out_partitions"], use_conv=partition_config["use_conv"], rank=3, name=self.name + "/out")
         #self.dff = Dense(self.intermediate_size, inp_size=self.d_model, use_conv=use_conv, activation=activation, name=self.name + "/out/")
-        self.out_ffn = Dense(self.d_model, inp_size=self.intermediate_size, use_conv=use_conv, name=self.name + "/out/")
+        #self.out_ffn = Dense(self.d_model, inp_size=self.intermediate_size, use_conv=False, name=self.name + "/out/")
 
 
         self.intermediate_partitions = 1
@@ -612,12 +639,11 @@ class BertEncoder(tf.keras.layers.Layer):
     def call(self, x, mask, training=True):
         attn_output = self.mha(x, x, x, mask)
         attn_output = self.dropout1(attn_output, training=training)
-        out1 = self.layernorm1(x + attn_output) # (batch_Size, seq_len, d_model)
+        out1 = self.layernorm1(x + attn_output)
         ffn_output1 = self.dff(out1)
         ffn_output2 = self.out_ffn(ffn_output1)
         ffn_output3 = self.dropout2(ffn_output2, training=training)
         out2 = self.layernorm2(out1 + ffn_output3)
-        #out2 = ffn_output2
         return out2
 
 class IntLayerNorm(tf.keras.layers.Layer):

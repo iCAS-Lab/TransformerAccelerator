@@ -45,7 +45,7 @@ def load_checkpoint(file_name):
     }
     return state_dict
 
-def from_tf1_checkpoint(tf1_checkpoint_path, configPath, use_conv=False, n_partitions=1):
+def from_tf1_checkpoint(tf1_checkpoint_path, configPath, partition_config):
 
     tf1_checkpoint = load_checkpoint(tf1_checkpoint_path)
     global unusedValues
@@ -67,22 +67,14 @@ def from_tf1_checkpoint(tf1_checkpoint_path, configPath, use_conv=False, n_parti
     mask = tf.keras.layers.Input(shape=(128), dtype=tf.float32, name="input_mask", ragged=False)
 
     custom_encoder = TransformerModel.BERT(n_layers, num_heads, vocab_size, seq_len,
-    n_segments, d_model, intermediate_size, activation=activation, use_conv=use_conv,
-    n_partitions=n_partitions, name="transformer")(x, seg, mask)
+    n_segments, d_model, intermediate_size, activation=activation, partition_config=partition_config, name="transformer")(x, seg, mask)
+
+    n_partitions = partition_config["embedding_partitions"]
 
     encoder_model = tf.keras.Model(inputs=[x, seg, mask], outputs=[custom_encoder])
     encoder_model.compile()
     inject_weights(tf1_checkpoint, encoder_model, n_layers, num_heads, n_partitions=n_partitions)
     return encoder_model
-
-from tensorflow.keras.models import Model
-def BERT_Classifier(backbone_model, classes, strategy = None):
-    backbone = backbone_model
-    x = backbone.output
-    x = tf.keras.layers.Dropout(0.1)(x)
-    x = tf.keras.layers.Dense(classes, activation='tanh')(x)
-    model = Model(inputs=backbone.input, outputs=x)
-    return model
 
 def removeFromList(name):
     global mappedWeights
@@ -173,8 +165,8 @@ def injectMHA(fromModel, toModel, num_heads, layer=0, n_partitions=1):
 
     n1,output_kernel = getWeightByName(fromModel, "layer_" + str(layer) + "/output/dense/kernel")
     n2,output_bias = getWeightByName(fromModel, "layer_" + str(layer) + "/output/dense/bias")
-    setWeightByName(toModel, "/layer_" + str(layer) + "/out/kernel:0", output_kernel, n1)
-    setWeightByName(toModel, "/layer_" + str(layer) + "/out/bias:0", output_bias, n2)
+    setWeightByName(toModel, "/layer_" + str(layer) + "/out/0/kernel:0", output_kernel, n1)
+    setWeightByName(toModel, "/layer_" + str(layer) + "/out/0/bias:0", output_bias, n2)
 
     n1,query_kernel = getWeightByName(fromModel, "layer_" + str(layer) + "/attention/self/query/kernel")
     n2,query_bias = getWeightByName(fromModel, "layer_" + str(layer) + "/attention/self/query/bias")

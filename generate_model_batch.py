@@ -1,43 +1,87 @@
 import os
 import tempfile
 
+import sys
+if not len(sys.argv) > 5:
+    print("usage:", sys.argv[0], "<model_name> <intr_partitions> <fc_out_part> <emb_part> <use_conv>")
+    exit()
+
+
 import tensorflow as tf
 import tensorflow_models as tfm
 import tensorflow_datasets as tfds
 
 import ConvertModel
 
-os.environ["CUDA_VISIBLE_DEVICES"]="0"
+import pandas as pd
+
+os.environ["CUDA_VISIBLE_DEVICES"]="-1"
+
+model_name = sys.argv[1]
+intr_part = int(sys.argv[2])
+out_part = int(sys.argv[3])
+emb_part = int(sys.argv[4])
+use_conv = sys.argv[5]=="True"
 
 partiton_config = {
-    "intermediate_partitions":2,
-    "fc_out_partitions":1,
-    "embedding_partitions":2,
-    "use_conv":False
+    "intermediate_partitions":intr_part,
+    "fc_out_partitions":out_part,
+    "embedding_partitions":emb_part,
+    "use_conv":use_conv
 }
 
-model_name = "uncased_L-4_H-512_A-8"
-model_dir = "models/" + model_name
-epochs = 5
+nicknames = {
+    "intermediate_partitions":"intr",
+    "fc_out_partitions":"out",
+    "embedding_partitions":"emb",
+    "use_conv":"conv"
+}
 
-#strategy = tf.distribute.MirroredStrategy()#devices=["/gpu:0", "/gpu:1", "/gpu:2"])
-strategy = tf.distribute.get_strategy()
-BATCH_SIZE_PER_REPLICA = 16
-batch_size = BATCH_SIZE_PER_REPLICA * strategy.num_replicas_in_sync
+model_info = pd.DataFrame()
+model_info = model_info.append(partiton_config, ignore_index=True)
+model_info["name"] = model_name
+
+print("Generating model:", model_name, "with config:")
+
+model_type = ""
+for key in partiton_config:
+    nickname = nicknames[key]
+    value = str(partiton_config[key])
+    model_type+=nickname + "-" + value + "_"
+    print("\t" + key + ": " + str(value))
+model_type = model_type[:-1]
+
+out_dir = "models_for_paper/" + model_type
+fp_dir = out_dir + "/fp32"
+int8_dir = out_dir + "/int8"
+edge_dir = out_dir + "/edgetpu"
+if not os.path.exists(fp_dir):
+    os.makedirs(fp_dir)
+if not os.path.exists(int8_dir):
+    os.makedirs(int8_dir)
+if not os.path.exists(edge_dir):
+    os.makedirs(edge_dir)
+
+model_dir = "models/" + model_name
 
 def fetchRawModel(batch_size=None):
-    #bert_encoder = ConvertModel.from_config(model_dir + "/bert_config.json", partition_config = partiton_config)
-    bert_encoder = ConvertModel.from_tf1_checkpoint(model_dir, partition_config = partiton_config)
-    bert_classifier = ConvertModel.BERT_Classifier(bert_encoder, 2, use_conv=partiton_config["use_conv"])
-    #bert_classifier = bert_encoder
-    return bert_classifier
-
+    bert_encoder = ConvertModel.from_config(model_dir + "/bert_config.json", partition_config = partiton_config)
+    return bert_encoder
+import numpy as np
 bert_classifier = fetchRawModel()
+trainableParams = np.sum([np.prod(v.get_shape()) for v in bert_classifier.trainable_weights])
+nonTrainableParams = np.sum([np.prod(v.get_shape()) for v in bert_classifier.non_trainable_weights])
+totalParams = trainableParams + nonTrainableParams
+
+model_info["trainable_params"] = trainableParams
+model_info["non_trainableParams"] = nonTrainableParams
+model_info["total_params"] = totalParams
+
 bert_classifier.summary()
 
 glue, info = tfds.load('glue/mrpc',
                        with_info=True,
-                       batch_size=batch_size)
+                       batch_size=1)
 
 tokenizer = tfm.nlp.layers.FastWordpieceBertTokenizer(
     vocab_file=os.path.join(model_dir, "vocab.txt"),
@@ -74,8 +118,8 @@ glue_test = glue['test'].map(bert_inputs_processor).prefetch(1)
 eval_batch_size = 32
 
 train_data_size = info.splits['train'].num_examples
-steps_per_epoch = int(train_data_size / batch_size)
-num_train_steps = steps_per_epoch * epochs
+steps_per_epoch = int(train_data_size / 1)
+num_train_steps = steps_per_epoch * 1
 warmup_steps = int(0.1 * num_train_steps)
 initial_learning_rate=2e-5
 
@@ -99,20 +143,6 @@ bert_classifier.compile(
     optimizer=optimizer,
     loss=loss,
     metrics=metrics)
-
-bert_classifier.evaluate(glue_validation)
-
-bert_classifier.fit(
-      glue_train,
-      validation_data=(glue_validation),
-      batch_size=batch_size,
-      epochs=epochs)
-
-print("VAL1")
-bert_classifier.evaluate(glue_validation)
-glue, info = tfds.load('glue/mrpc',
-                       with_info=True,
-                       batch_size=1)
 
 tokenizer = tfm.nlp.layers.FastWordpieceBertTokenizer(
     vocab_file=os.path.join(model_dir, "vocab.txt"),
@@ -141,8 +171,7 @@ for input_idx in range(len(bert_classifier.input)):
 
 float_converter = tf.lite.TFLiteConverter.from_keras_model(bert_classifier)
 float_tflite_model = float_converter.convert()
-open("tflite_models/mrpc_" + model_name + "_fp32.tflite", "wb").write(float_tflite_model)
-"""
+
 converter = tf.lite.TFLiteConverter.from_keras_model(bert_classifier)
 converter.optimizations = [tf.lite.Optimize.DEFAULT]
 converter.representative_dataset = representative_dataset
@@ -167,6 +196,6 @@ with open(quant_file, 'wb') as f:
 print("Float model in Mb:", os.path.getsize(float_file) / float(2**20))
 print("Quantized model in Mb:", os.path.getsize(quant_file) / float(2**20))
 
-open("tflite_models/mrpc_" + model_name + "_int8.tflite", "wb").write(quantized_tflite_model)
-open("tflite_models/mrpc_" + model_name + "_fp32.tflite", "wb").write(float_tflite_model)
-#"""
+open("models_for_paper/" + model_type + "/fp32/" + model_name + "_fp32.tflite", "wb").write(float_tflite_model)
+open("models_for_paper/" + model_type + "/int8/" + model_name + "_int8.tflite", "wb").write(quantized_tflite_model)
+model_info.to_csv("models_for_paper/" + model_type + "/" + model_name + "_info.csv")

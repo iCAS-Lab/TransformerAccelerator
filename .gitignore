@@ -11,8 +11,11 @@ __pycache__/
 data/
 aclImdb/
 .ipynb_checkpoints/
+result_summary/
 debugger_results/
 tflite_models/
 partitioned_models/
 use_conv_models/
 partitioned_no_embedding/
+models_for_paper/
+fp32_BET_models/
