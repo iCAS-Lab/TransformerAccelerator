@@ -1,4 +1,4 @@
-# Quantization Aware Training for BERT models
+# BERT models for EdgeTPU
 
 ## Private repo do not share outside of lab (for now)
 
