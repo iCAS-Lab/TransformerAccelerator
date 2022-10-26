@@ -275,8 +275,8 @@ class MultiHeadedAttention(tf.keras.layers.Layer):
         self.num_heads = num_heads
         self.activation = activation
         self.act_out = activations.get(activation)
-        #if activation == 'gelu':
-        #    self.act_out = approx_gelu
+        if activation == 'gelu':
+            self.act_out = approx_gelu
         self.d_model = d_model
 
     def build(self, input_shape):
@@ -347,8 +347,8 @@ class Dense(tf.keras.layers.Layer):
         self.inp_size = inp_size
         self.activation = activation
         self.act_out = activations.get(activation)
-        #if activation=="gelu":
-        #    self.act_out=approx_gelu
+        if activation=="gelu":
+            self.act_out=approx_gelu
 
     def get_config(self):
         return {
@@ -548,8 +548,8 @@ class BERT(tf.keras.layers.Layer):
 
         self.activation = activation
         self.act_out = activations.get(activation)
-        #if activation == 'gelu':
-        #    self.act_out = approx_gelu
+        if activation == 'gelu':
+            self.act_out = approx_gelu
 
         self.pooler_ffn = Dense(self.d_model, inp_size=self.d_model, use_conv=self.use_conv, name = self.name + "pooler_transform")
 
@@ -613,8 +613,8 @@ class BertEncoder(tf.keras.layers.Layer):
         self.use_partitions=True
 
         self.activation1 = activations.get(activation)
-        #if activation == 'gelu':
-        #    self.activation1 = approx_gelu
+        if activation == 'gelu':
+            self.activation1 = approx_gelu
 
 
     def get_config(self):
