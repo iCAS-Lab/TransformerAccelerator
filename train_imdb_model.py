@@ -8,7 +8,7 @@ import tempfile
 import tensorflow as tf
 
 import TransformerModel
-import TransformerQuantization
+import depricated.TransformerQuantization as TransformerQuantization
 import IMDB_Dataset
 #os.environ["CUDA_VISIBLE_DEVICES"]="0"
 MAX_FEATURES = 10000
