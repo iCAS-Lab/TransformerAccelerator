@@ -37,6 +37,8 @@ nicknames = {
     "use_conv":"conv"
 }
 
+out_dir = "fp32_BERT_models"
+
 model_info = pd.DataFrame()
 model_info = model_info.append(partiton_config, ignore_index=True)
 model_info["name"] = model_name
@@ -51,7 +53,8 @@ for key in partiton_config:
     print("\t" + key + ": " + str(value))
 model_type = model_type[:-1]
 
-out_dir = "models_for_paper/" + model_type
+out_dir = os.path.join(out_dir, model_type)
+
 fp_dir = out_dir + "/fp32"
 int8_dir = out_dir + "/int8"
 edge_dir = out_dir + "/edgetpu"
@@ -196,6 +199,6 @@ with open(quant_file, 'wb') as f:
 print("Float model in Mb:", os.path.getsize(float_file) / float(2**20))
 print("Quantized model in Mb:", os.path.getsize(quant_file) / float(2**20))
 
-open("models_for_paper/" + model_type + "/fp32/" + model_name + "_fp32.tflite", "wb").write(float_tflite_model)
-open("models_for_paper/" + model_type + "/int8/" + model_name + "_int8.tflite", "wb").write(quantized_tflite_model)
-model_info.to_csv("models_for_paper/" + model_type + "/" + model_name + "_info.csv")
+open(out_dir + "/fp32/" + model_name + "_fp32.tflite", "wb").write(float_tflite_model)
+open(out_dir + "/int8/" + model_name + "_int8.tflite", "wb").write(quantized_tflite_model)
+model_info.to_csv(out_dir + "/" + model_name + "_info.csv")

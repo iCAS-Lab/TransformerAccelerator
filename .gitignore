@@ -3,6 +3,8 @@
 *.ipynb
 *.zip
 *.tflite
+*.sh
+*.txt
 
 .vscode/
 models/
@@ -18,4 +20,5 @@ partitioned_models/
 use_conv_models/
 partitioned_no_embedding/
 models_for_paper/
-fp32_BET_models/
+fp32_BERT_models/
+bert_large_models/

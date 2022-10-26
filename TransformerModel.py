@@ -278,8 +278,8 @@ class MultiHeadedAttention(tf.keras.layers.Layer):
         self.num_heads = num_heads
         self.activation = activation
         self.act_out = activations.get(activation)
-        if activation == 'gelu':
-            self.act_out = approx_gelu
+        #if activation == 'gelu':
+        #    self.act_out = approx_gelu
         self.d_model = d_model
 
     def build(self, input_shape):
@@ -350,8 +350,8 @@ class Dense(tf.keras.layers.Layer):
         self.inp_size = inp_size
         self.activation = activation
         self.act_out = activations.get(activation)
-        if activation=="gelu":
-            self.act_out=approx_gelu
+        #if activation=="gelu":
+        #    self.act_out=approx_gelu
 
     def get_config(self):
         return {
@@ -388,7 +388,6 @@ class Dense(tf.keras.layers.Layer):
             nn_ops.convolution_v2,
             strides=list(conv_utils.normalize_tuple(1, 1, 'strides')),
             name='conv1d')
-        print("Actual:",self.inp_size,self.size)
     
     def call(self, x):
         if not self.use_conv:
@@ -552,8 +551,8 @@ class BERT(tf.keras.layers.Layer):
 
         self.activation = activation
         self.act_out = activations.get(activation)
-        if activation == 'gelu':
-            self.act_out = approx_gelu
+        #if activation == 'gelu':
+        #    self.act_out = approx_gelu
 
         self.pooler_ffn = Dense(self.d_model, inp_size=self.d_model, use_conv=self.use_conv, name = self.name + "pooler_transform")
 
@@ -617,8 +616,8 @@ class BertEncoder(tf.keras.layers.Layer):
         self.use_partitions=True
 
         self.activation1 = activations.get(activation)
-        if activation == 'gelu':
-            self.activation1 = approx_gelu
+        #if activation == 'gelu':
+        #    self.activation1 = approx_gelu
 
 
     def get_config(self):
