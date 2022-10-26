@@ -5,7 +5,6 @@
 # Last Modified: Sep 12 2022
 #
 
-import ConvertModelFromHub
 import ConvertFromTF1Checkpoint
 import os
 import json
@@ -43,8 +42,9 @@ def from_config(configPath, partition_config = None):
     encoder_model = tf.keras.Model(inputs=[x, seg, mask], outputs=[custom_encoder])
     return encoder_model
 
-def from_hub_encoder(hub_encoder, configPath, strategy=None):
-    return ConvertModelFromHub.from_hub_encoder(hub_encoder, configPath, strategy=strategy)
+# TODO depricate fub encoder
+#def from_hub_encoder(hub_encoder, configPath, strategy=None):
+#    return ConvertModelFromHub.from_hub_encoder(hub_encoder, configPath, strategy=strategy)
 
 def from_tf1_checkpoint(model_dir, partition_config=None):
     if partition_config==None:
