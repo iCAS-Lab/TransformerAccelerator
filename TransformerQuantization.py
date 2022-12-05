@@ -296,42 +296,22 @@ class OutputQuantizationConfig(tfmot.quantization.keras.QuantizeConfig):
     return {}
 
 def apply_quantization_to_custom(layer):
-  if isinstance(layer, TransformerModel.ScaledDotProduct):
-    return tfmot.quantization.keras.quantize_annotate_layer(layer, ScaledDotProductQuantizeConfig())
-  if isinstance(layer, TransformerModel.ScaledConvolutionalDotProduct):
-    return tfmot.quantization.keras.quantize_annotate_layer(layer, ScaledConvolutionalDotProductQuantizeConfig())
-  if isinstance(layer, TransformerModel.MultiHeadedAttention) or isinstance(layer, TransformerModel.TPUAcceleratedMultiHeadedAttention) or isinstance(layer, TransformerModel.BERTMultiHeadedAttention):
-    return tfmot.quantization.keras.quantize_annotate_layer(layer, MultiHeadedAttentionQuantizeConfig())
-  if isinstance(layer, TransformerModel.BertEncoder):
-    return tfmot.quantization.keras.quantize_annotate_layer(layer, BERTEncoderQuantizationConfig())
-  if isinstance(layer, tf.keras.layers.Embedding) or isinstance(layer, TransformerModel.QuantizedEmbedding):
-    return tfmot.quantization.keras.quantize_annotate_layer(layer, EmbeddingQuantizationConfig())
-  if isinstance(layer, TransformerModel.LinearLayer):
-    return tfmot.quantization.keras.quantize_annotate_layer(layer, OutputQuantizationConfig())
   if isinstance(layer, TransformerModel.BERT):
-    return tfmot.quantization.keras.quantize_annotate_layer(layer, BERTQuantizationConfig())
+    return tfmot.quantization.keras.quantize_annotate_layer(layer, OutputQuantizationConfig())
   return tfmot.quantization.keras.quantize_annotate_layer(layer)
 
 def QuantizeTransformer(model):
     annotated_model = tf.keras.models.clone_model(model, clone_function=apply_quantization_to_custom)
     with quantize_scope(
-        {'QuantizedEmbedding':TransformerModel.QuantizedEmbedding,
-        'OutputQuantizationConfig':OutputQuantizationConfig,
-        'EmbeddingQuantizationConfig':EmbeddingQuantizationConfig,
-        'LinearLayer':TransformerModel.LinearLayer,
-        'ScaledConvolutionalDotProduct':TransformerModel.ScaledConvolutionalDotProduct,
-        'ScaledConvolutionalDotProductQuantizeConfig':ScaledConvolutionalDotProductQuantizeConfig,
-        'NoQuantizationConfig':NoQuantizationConfig,
+        {'ScaledDotProduct':TransformerModel.ScaledDotProduct,
         'MultiHeadedAttention':TransformerModel.MultiHeadedAttention,
-        'TPUAcceleratedMultiHeadedAttention':TransformerModel.TPUAcceleratedMultiHeadedAttention,
-        'MultiHeadedAttentionQuantizeConfig':MultiHeadedAttentionQuantizeConfig,
-        'ScaledDotProduct':TransformerModel.ScaledDotProduct,
-        'ScaledDotProductQuantizeConfig':ScaledDotProductQuantizeConfig,
-        'BERTMultiHeadedAttention':TransformerModel.BERTMultiHeadedAttention,
-        'BertEncoder':TransformerModel.BertEncoder,
-        'BERTEncoderQuantizationConfig':BERTEncoderQuantizationConfig,
+        'Dense':TransformerModel.Dense,
+        'PartitionLayer':TransformerModel.PartitionLayer,
+        'PartitionEmbedding':TransformerModel.PartitionEmbedding,
+        'BertEmbedding':TransformerModel.BertEmbedding,
         'BERT':TransformerModel.BERT,
-        'BERTQuantizationConfig':BERTQuantizationConfig}
+        'BertEncoder':TransformerModel.BertEncoder,
+        'OutputQuantizationConfig':OutputQuantizationConfig}
         ):
         quant_aware_model = tfmot.quantization.keras.quantize_apply(annotated_model)
     return quant_aware_model

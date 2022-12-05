@@ -23,20 +23,20 @@ model_name = "uncased_L-2_H-128_A-2"
 model_dir = "models/" + model_name
 epochs = 5
 
+bert_classifier = tf.keras.models.load_model('bert_tiny.h5', custom_objects={
+    'ScaledDotProduct':TransformerModel.ScaledDotProduct,
+    'MultiHeadedAttention':TransformerModel.MultiHeadedAttention,
+    'Dense':TransformerModel.Dense,
+    'PartitionLayer':TransformerModel.PartitionLayer,
+    'PartitionEmbedding':TransformerModel.PartitionEmbedding,
+    'BertEmbedding':TransformerModel.BertEmbedding,
+    'BERT':TransformerModel.BERT,
+    'BertEncoder':TransformerModel.BertEncoder})
+
 #strategy = tf.distribute.MirroredStrategy()#devices=["/gpu:0", "/gpu:1", "/gpu:2"])
 strategy = tf.distribute.get_strategy()
 BATCH_SIZE_PER_REPLICA = 16
 batch_size = BATCH_SIZE_PER_REPLICA * strategy.num_replicas_in_sync
-
-def fetchRawModel(batch_size=None):
-    #bert_encoder = ConvertModel.from_config(model_dir + "/bert_config.json", partition_config = partiton_config)
-    bert_encoder = ConvertModel.from_tf1_checkpoint(model_dir, partition_config = partiton_config)
-    bert_classifier = ConvertModel.BERT_Classifier(bert_encoder, 2, use_conv=partiton_config["use_conv"])
-    #bert_classifier = bert_encoder
-    return bert_classifier
-
-bert_classifier = fetchRawModel()
-bert_classifier.summary()
 
 glue, info = tfds.load('glue/mrpc',
                        with_info=True,
@@ -97,33 +97,6 @@ optimizer = tf.keras.optimizers.experimental.Adam(
 
 metrics = [tf.keras.metrics.SparseCategoricalAccuracy('accuracy', dtype=tf.float32)]
 loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-
-bert_classifier.compile(
-    optimizer=optimizer,
-    loss=loss,
-    metrics=metrics)
-
-bert_classifier.evaluate(glue_validation)
-
-bert_classifier.fit(
-      glue_train,
-      validation_data=(glue_validation),
-      batch_size=batch_size,
-      epochs=epochs)
-
-print("before")
-bert_classifier.evaluate(glue_validation)
-
-bert_classifier.save("bert_tiny.h5", include_optimizer=False)
-bert_classifier = tf.keras.models.load_model('bert_tiny.h5', custom_objects={
-    'ScaledDotProduct':TransformerModel.ScaledDotProduct,
-    'MultiHeadedAttention':TransformerModel.MultiHeadedAttention,
-    'Dense':TransformerModel.Dense,
-    'PartitionLayer':TransformerModel.PartitionLayer,
-    'PartitionEmbedding':TransformerModel.PartitionEmbedding,
-    'BertEmbedding':TransformerModel.BertEmbedding,
-    'BERT':TransformerModel.BERT,
-    'BertEncoder':TransformerModel.BertEncoder})
 
 bert_classifier.compile(
     optimizer=optimizer,

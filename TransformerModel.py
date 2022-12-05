@@ -529,6 +529,8 @@ class BERT(tf.keras.layers.Layer):
         super(BERT, self).__init__(name=name)
         if partition_config==None:
             partition_config=DEFAULT_PARTITION_CONFIG
+        self.partition_config=partition_config
+        self.rate = rate
         self.n_layers = n_layers
         self.num_heads = num_heads
         self.vocab_size = vocab_size
@@ -560,13 +562,14 @@ class BERT(tf.keras.layers.Layer):
             'vocab_size': self.vocab_size,
             'seq_len': self.seq_len,
             'n_segments':self.n_segments,
-            'use_conv':self.use_conv,
             'name':self.name,
             'd_model':self.d_model,
             'intermediate_size':self.intermediate_size,
             'activation':self.activation,
-            'n_partitions':self.n_partitions
+            'rate':self.rate,
+            'partition_config':self.partition_config
             }
+        
     def build(self, input_shape):
         pass
 
@@ -588,6 +591,7 @@ class BertEncoder(tf.keras.layers.Layer):
         if partition_config==None:
             partition_config=DEFAULT_PARTITION_CONFIG
 
+        self.partition_config=partition_config
         self.d_model = d_model
         self.num_heads = num_heads
         self.intermediate_size = intermediate_size
@@ -623,11 +627,12 @@ class BertEncoder(tf.keras.layers.Layer):
             'num_heads': self.num_heads,
             'intermediate_size':self.intermediate_size,
             'rate':self.rate,
-            'use_conv':self.use_conv,
+            'partition_config':self.partition_config,
             'name':self.name,
             'activation':self.activation,
-            'n_partitions':self.n_partitions
             }
+
+            #num_heads, d_model, intermediate_size, rate=0.1, activation='gelu', partition_config=None, name=None
 
     def build(self, input_shape):
         pass
