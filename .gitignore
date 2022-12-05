@@ -22,3 +22,10 @@ partitioned_no_embedding/
 models_for_paper/
 fp32_BERT_models/
 bert_large_models/
+fast_sims/
+fast_sims2/
+fast_sims3/
+depricated/
+py_sim/
+new_comp_strategy/
+model_sims/

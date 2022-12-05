@@ -117,7 +117,7 @@ def setWeightByName(model, name, inWeight, pseudoName):
             assert weight.shape==inWeight.shape
             tempName = weight.name
             model.weights[i].assign(inWeight)
-            outputMap.append((pseudoName, weight.name))
+            outputMap.append((str([pseudoName, inWeight.shape]), str([weight.name, weight.shape])))
             removeFromList(weight.name)
             return
     raise Exception("ModelConverter was unable to find layer: " + name + "\nDid you mean " + str(closestVal))
@@ -166,7 +166,7 @@ def injectMHA(fromModel, toModel, num_heads, layer=0, n_partitions=1):
     n1,output_kernel = getWeightByName(fromModel, "layer_" + str(layer) + "/output/dense/kernel")
     n2,output_bias = getWeightByName(fromModel, "layer_" + str(layer) + "/output/dense/bias")
     setWeightByName(toModel, "/layer_" + str(layer) + "/out/0/kernel:0", output_kernel, n1)
-    setWeightByName(toModel, "/layer_" + str(layer) + "/out/0/bias:0", output_bias, n2)
+    setWeightByName(toModel, "/layer_" + str(layer) + "/out/bias:0", output_bias, n2)
 
     n1,query_kernel = getWeightByName(fromModel, "layer_" + str(layer) + "/attention/self/query/kernel")
     n2,query_bias = getWeightByName(fromModel, "layer_" + str(layer) + "/attention/self/query/bias")

@@ -275,8 +275,8 @@ class MultiHeadedAttention(tf.keras.layers.Layer):
         self.num_heads = num_heads
         self.activation = activation
         self.act_out = activations.get(activation)
-        #if activation == 'gelu':
-        #    self.act_out = approx_gelu
+        if activation == 'gelu':
+            self.act_out = approx_gelu
         self.d_model = d_model
 
     def build(self, input_shape):
@@ -347,8 +347,8 @@ class Dense(tf.keras.layers.Layer):
         self.inp_size = inp_size
         self.activation = activation
         self.act_out = activations.get(activation)
-        #if activation=="gelu":
-        #    self.act_out=approx_gelu
+        if activation=="gelu":
+            self.act_out=approx_gelu
 
     def get_config(self):
         return {
@@ -548,8 +548,8 @@ class BERT(tf.keras.layers.Layer):
 
         self.activation = activation
         self.act_out = activations.get(activation)
-        #if activation == 'gelu':
-        #    self.act_out = approx_gelu
+        if activation == 'gelu':
+            self.act_out = approx_gelu
 
         self.pooler_ffn = Dense(self.d_model, inp_size=self.d_model, use_conv=self.use_conv, name = self.name + "pooler_transform")
 
@@ -604,7 +604,7 @@ class BertEncoder(tf.keras.layers.Layer):
         self.activation = activation
 
         self.dff = PartitionLayer(self.intermediate_size, self.d_model, num_layers=partition_config["intermediate_partitions"], activation=activation, use_conv=partition_config["use_conv"], name="intermediate")#Dense(self.intermediate_size, inp_size=self.d_model, use_conv=use_conv, name=self.name + "/intermediate/")
-        self.out_ffn = PartitionLayer(self.d_model, self.intermediate_size, partition_output=False, num_layers=partition_config["fc_out_partitions"], use_conv=partition_config["use_conv"], rank=3, name=self.name + "/out")
+        self.out_ffn = PartitionLayer(self.d_model, self.intermediate_size, partition_output=False, num_layers=partition_config["fc_out_partitions"], use_conv=partition_config["use_conv"], rank=3, name="out")
         #self.dff = Dense(self.intermediate_size, inp_size=self.d_model, use_conv=use_conv, activation=activation, name=self.name + "/out/")
         #self.out_ffn = Dense(self.d_model, inp_size=self.intermediate_size, use_conv=False, name=self.name + "/out/")
 
@@ -613,8 +613,8 @@ class BertEncoder(tf.keras.layers.Layer):
         self.use_partitions=True
 
         self.activation1 = activations.get(activation)
-        #if activation == 'gelu':
-        #    self.activation1 = approx_gelu
+        if activation == 'gelu':
+            self.activation1 = approx_gelu
 
 
     def get_config(self):
@@ -683,21 +683,26 @@ class IntLayerNorm(tf.keras.layers.Layer):
     
 
 class EncoderLayer(tf.keras.layers.Layer):
-    def __init__(self, num_heads, d_model, dff, rate=0.1, name=None):
+    def __init__(self, num_heads, d_model, dff, partition_config=None, rate=0.1, name=None):
         super(EncoderLayer, self).__init__(name=name)
+        if partition_config==None:
+            partition_config = DEFAULT_PARTITION_CONFIG
 
         self.d_model = d_model
         self.num_heads = num_heads
         self.dff = dff
         self.rate = rate
 
-        self.mha = MultiHeadedAttention(num_heads, dff, name = self.name + "_mha_")
-
+        self.mha = BERTMultiHeadedAttention(num_heads, d_model, activation='relu', partition_config=partition_config, name = "mha")
+        
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-12)
         self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-12)
         
         self.dropout1 = tf.keras.layers.Dropout(rate)
         self.dropout2 = tf.keras.layers.Dropout(rate)
+
+        self.intr = Dense(self.dff, inp_size=self.d_model, activation='relu', use_conv=partition_config["use_conv"])
+        self.fc_out = Dense(self.d_model, inp_size=self.dff, activation='relu', use_conv=partition_config["use_conv"])
 
     def get_config(self):
         return {
@@ -709,45 +714,32 @@ class EncoderLayer(tf.keras.layers.Layer):
             }
 
     def build(self, input_shape):
-
-        self.mha.build(input_shape)
-
-        self.kernel_dff = self.add_weight(self.name + "_kernel_dff",shape=[self.d_model,self.dff],
-                initializer='random_normal',
-                trainable=True)
-        self.bias_dff = self.add_weight(self.name + "_bias_dff",shape=[self.dff],
-                initializer='random_normal',
-                trainable=True)
-
-        self.kernel_out = self.add_weight(self.name + "kernel_out",shape=[self.dff,self.d_model],
-                initializer='random_normal',
-                trainable=True)
-        self.bias_out = self.add_weight(self.name + "bias_out",shape=[self.d_model],
-                initializer='random_normal',
-                trainable=True)
+        pass
 
     def call(self, x, mask, training=True):
         attn_output = self.mha(x, x, x, mask)
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(x + attn_output)
         
-        ffn_output1 = relu(tf.matmul(out1, self.kernel_dff) + self.bias_dff)
-        ffn_output2 = relu(tf.matmul(ffn_output1, self.kernel_out) + self.bias_out)
+        ffn_output1 = self.intr(out1)
+        ffn_output2 = self.fc_out(ffn_output1)
         ffn_output3 = self.dropout2(ffn_output2, training=training)
         out2 = self.layernorm2(out1 + ffn_output3)
         
         return out2
 
 class DecoderLayer(tf.keras.layers.Layer):
-    def __init__(self, num_heads, d_model, dff, rate=0.1, name=None):
+    def __init__(self, num_heads, d_model, dff, partition_config=None, rate=0.1, name=None):
         super(DecoderLayer, self).__init__(name=name)
+        if partition_config==None:
+            partition_config = DEFAULT_PARTITION_CONFIG
         self.d_model = d_model
         self.num_heads = num_heads
         self.dff = dff
         self.rate = rate
 
-        self.mha1 = MultiHeadedAttention(num_heads, d_model)
-        self.mha2 = MultiHeadedAttention(num_heads, d_model)
+        self.mha1 = BERTMultiHeadedAttention(num_heads, d_model, activation='relu', partition_config=partition_config, name = "mha")
+        self.mha2 = BERTMultiHeadedAttention(num_heads, d_model, activation='relu', partition_config=partition_config, name = "mha")
 
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-12)
         self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-12)
@@ -757,6 +749,9 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.dropout2 = tf.keras.layers.Dropout(rate)
         self.dropout3 = tf.keras.layers.Dropout(rate)
 
+        self.intr = Dense(self.dff, inp_size=self.d_model, activation='relu', use_conv=partition_config["use_conv"])
+        self.fc_out = Dense(self.d_model, inp_size=self.dff, activation='relu', use_conv=partition_config["use_conv"])
+
     def get_config(self):
         return {
             'd_model': self.d_model,
@@ -767,23 +762,7 @@ class DecoderLayer(tf.keras.layers.Layer):
             }
 
     def build(self, input_shape):
-
-        self.mha1.build([self.d_model])
-        self.mha2.build([self.d_model])
-
-        self.kernel_dff = self.add_weight(self.name + "_kernel_dff",shape=[self.d_model,self.dff],
-                initializer='random_normal',
-                trainable=True)
-        self.bias_dff = self.add_weight(self.name + "_bias_dff",shape=[self.dff],
-                initializer='random_normal',
-                trainable=True)
-
-        self.kernel_out = self.add_weight(self.name + "kernel_out",shape=[self.dff,self.d_model],
-                initializer='random_normal',
-                trainable=True)
-        self.bias_out = self.add_weight(self.name + "bias_out",shape=[self.d_model],
-                initializer='random_normal',
-                trainable=True)
+        pass
 
     def call(self, x, enc_output, combined_mask, pad_mask, training=True):
         attn1 = self.mha1(x, x, x, combined_mask)  # (batch_size, target_seq_len, d_model)
@@ -794,8 +773,10 @@ class DecoderLayer(tf.keras.layers.Layer):
         attn2 = self.dropout2(attn2, training=training)
         out2 = self.layernorm2(attn2 + out1)
         
-        ffn_output = relu(tf.matmul(out2, self.kernel_dff) + self.bias_dff)
-        ffn_output = relu(tf.matmul(ffn_output, self.kernel_out) + self.bias_out)
+        #ffn_output = relu(tf.matmul(out2, self.kernel_dff) + self.bias_dff)
+        #ffn_output = relu(tf.matmul(ffn_output, self.kernel_out) + self.bias_out)
+        ffn_output = self.intr(out2)
+        ffn_output = self.fc_out(ffn_output)
         ffn_output = self.dropout3(ffn_output, training=training)
         out3 = self.layernorm3(ffn_output + out2)
         
@@ -803,8 +784,10 @@ class DecoderLayer(tf.keras.layers.Layer):
 
 class Encoder(tf.keras.layers.Layer):
     def __init__(self, num_layers, num_heads, d_model, dff, input_vocab_size,
-            maximum_position_encoding, rate=0.1, name=None):
+            maximum_position_encoding, partition_config=None, rate=0.1, name=None):
         super(Encoder, self).__init__(name=name)
+        if partition_config==None:
+            partition_config = DEFAULT_PARTITION_CONFIG
         self.d_model = d_model
         self.num_layers = num_layers
         self.num_heads = num_heads
@@ -817,7 +800,7 @@ class Encoder(tf.keras.layers.Layer):
         self.pos_encoding = positional_encoding(maximum_position_encoding, 
                                                 self.d_model)
 
-        self.enc_layers = [EncoderLayer(num_heads, d_model, dff, rate, name=self.name + str(i)) 
+        self.enc_layers = [EncoderLayer(num_heads, d_model, dff, rate=rate, partition_config=partition_config, name=self.name + str(i)) 
                         for i in range(num_layers)]
     
         self.dropout = tf.keras.layers.Dropout(rate)
@@ -839,14 +822,14 @@ class Encoder(tf.keras.layers.Layer):
             self.enc_layers[i].build([self.d_model])
 
 
-    def call(self, x, training=True):
+    def call(self, x, mask, training=True):
 
         # adding embedding and position encoding.
         seq_len = tf.shape(x)[1]
-        mask = tf.where(tf.equal(x,0), tf.ones_like(x)*-1e9, tf.zeros_like(x))
+        #mask = tf.where(tf.equal(x,0), tf.ones_like(x)*-1e9, tf.zeros_like(x))
         #mask = tf.cast(tf.math.equal(x, 0), tf.float32)
         #mask = mask[:, tf.newaxis, :]
-        mask = tf.expand_dims(mask, axis=1)
+        #mask = tf.expand_dims(mask, axis=1)
 
         x = self.embedding(x)  # (batch_size, input_seq_len, d_model)
         x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
@@ -856,13 +839,15 @@ class Encoder(tf.keras.layers.Layer):
         
         for i in range(self.num_layers):
             x = self.enc_layers[i](x, mask, training=training)
-        return x, mask
+        return x
 
 
 class Decoder(tf.keras.layers.Layer):
     def __init__(self, num_layers, num_heads, d_model, dff, target_vocab_size,
-            maximum_position_encoding, rate=0.1, name=None):
+            maximum_position_encoding, partition_config=None, rate=0.1, name=None):
         super(Decoder, self).__init__(name=name)
+        if partition_config==None:
+            partition_config = DEFAULT_PARTITION_CONFIG
         self.d_model = d_model
         self.num_layers = num_layers
         self.num_heads = num_heads
@@ -875,7 +860,7 @@ class Decoder(tf.keras.layers.Layer):
         self.pos_encoding = positional_encoding(maximum_position_encoding, 
                                                 self.d_model)
 
-        self.dec_layers = [DecoderLayer(num_heads, d_model, dff, rate, name=self.name + str(i)) 
+        self.dec_layers = [DecoderLayer(num_heads, d_model, dff, rate=rate, name=self.name + str(i), partition_config=partition_config) 
                         for i in range(num_layers)]
     
         self.dropout = tf.keras.layers.Dropout(rate)
@@ -897,16 +882,14 @@ class Decoder(tf.keras.layers.Layer):
             self.dec_layers[i].build([self.d_model])
 
 
-    def call(self, x, enc_output, enc_mask, training=True):
+    def call(self, x, enc_output, enc_mask, combined_mask, training=True):
 
         seq_len = tf.shape(x)[1]
 
-        look_ahead_mask = 1 - tf.linalg.band_part(tf.ones((seq_len, seq_len)), -1, 0)
-        dec_target_padding_mask = tf.where(tf.equal(x,0), tf.ones_like(x), tf.zeros_like(x))
-        #dec_target_padding_mask = tf.cast(tf.math.equal(x, 0), tf.float32)
-        #dec_target_padding_mask = dec_target_padding_mask[:, tf.newaxis, :]
-        dec_target_padding_mask = tf.expand_dims(dec_target_padding_mask, axis=1)
-        combined_mask = tf.maximum(dec_target_padding_mask, look_ahead_mask)*-1e9
+        #look_ahead_mask = 1 - tf.linalg.band_part(tf.ones((seq_len, seq_len)), -1, 0)
+        #dec_target_padding_mask = tf.where(tf.equal(x,0), tf.ones_like(x), tf.zeros_like(x))
+        #dec_target_padding_mask = tf.expand_dims(dec_target_padding_mask, axis=1)
+        #combined_mask = tf.maximum(dec_target_padding_mask, look_ahead_mask)*-1e9
 
         x = self.embedding(x)
         x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
