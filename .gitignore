@@ -12,6 +12,7 @@ models/
 __pycache__/
 data/
 aclImdb/
+debug/
 .ipynb_checkpoints/
 result_summary/
 debugger_results/
@@ -21,6 +22,7 @@ use_conv_models/
 partitioned_no_embedding/
 models_for_paper/
 fp32_BERT_models/
+DAC2023_files/
 bert_large_models/
 fast_sims/
 fast_sims2/

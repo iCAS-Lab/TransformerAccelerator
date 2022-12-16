@@ -1,3 +1,66 @@
+import tensorflow as tf
+import numpy as np
+import tensorflow_model_optimization as tfmot
+from keras import activations
+from tensorflow.python.framework import tensor_shape
+from tensorflow.python.keras.utils import conv_utils
+from tensorflow.python.ops import nn_ops
+import functools
+import math
+import json
+import TransformerModel
+
+class DynamicLayerNormalization(tf.keras.layers.Layer):
+    """
+    Tensorflow implmentation of integer-only layer norm
+    https://github.com/kssteven418/I-BERT
+    https://github.com/huggingface/transformers/blob/main/src/transformers/models/ibert/quant_modules.py
+
+    """
+    
+    def __init__(self, epsilon=1e-6, name=None):
+        super(DynamicLayerNormalization, self).__init__(name=name)
+        self.epsilon = epsilon
+        self.outter_dim = None
+        self.middle_dim = None
+        self.alpha = 1
+        self.epochs = 0
+        self.transition_epoch = 60
+        self.dropout = tf.keras.layers.Dropout(0.1)
+
+    def get_config(self):
+        return {
+            'epsilon': self.epsilon,
+            'name':self.name
+            }
+
+    def build(self, input_shape):
+        input_shape = tf.TensorShape(input_shape)
+        self.middle_dim = input_shape[-2]
+        self.outter_dim = input_shape[-1]
+        self.weight = self.add_weight("gamma",shape=[input_shape[-1]],
+                initializer='random_normal',
+                trainable=True)
+
+        #beta
+        self.bias = self.add_weight("beta",shape=[input_shape[-1]],
+                initializer='random_normal',
+                trainable=True)
+
+    def call(self, x):
+        mean, var = tf.nn.moments(x, -1, keepdims=True)
+        #xsum = tf.math.reduce_sum(x, axis=-1, keepdims=True)
+        #mean = xsum/self.outter_dim
+        #x = y*tf.math.rsqrt(self.epsilon + var)
+        y = x - mean
+        xmin = tf.math.reduce_min(y, axis=-2, keepdims=True)
+        xmax = tf.math.reduce_max(y, axis=-2, keepdims=True)
+
+        scale_adjustment = 1 / (math.sqrt(2*np.log(self.outter_dim)))
+        x = (y)/((xmax-xmin)*scale_adjustment)
+        x = x * self.weight + self.bias
+        return x
+
 #
 # Author: Brendan Reidy
 # Email: bcreidy@email.sc.edu
@@ -776,44 +839,6 @@ class BertEncoder(tf.keras.layers.Layer):
         #out2 = ffn_output3
         out2 = self.layernorm2(out1 + ffn_output3)
         return out2
-
-class DynamicLayerNormalization(tf.keras.layers.Layer):
-    """
-    Tensorflow implmentation of integer-only layer norm
-    https://github.com/kssteven418/I-BERT
-    https://github.com/huggingface/transformers/blob/main/src/transformers/models/ibert/quant_modules.py
-
-    """
-    
-    def __init__(self, epsilon=1e-6, name=None):
-        super(DynamicLayerNormalization, self).__init__(name=name)
-        self.epsilon = epsilon
-
-    def get_config(self):
-        return {
-            'epsilon': self.epsilon,
-            'name':self.name
-            }
-
-    def build(self, input_shape):
-        #gamma
-        input_shape = tf.TensorShape(input_shape)
-        self.weight = self.add_weight("gamma",shape=[input_shape[-1]],
-                initializer='random_normal',
-                trainable=True)
-
-        #beta
-        self.bias = self.add_weight("beta",shape=[input_shape[-1]],
-                initializer='random_normal',
-                trainable=True)
-
-    def call(self, x):
-        mean, var = tf.nn.moments(x, -1, keepdims=True)
-        y = x - mean
-        x = y*tf.math.rsqrt(self.epsilon + var)
-        x = x * self.weight + self.bias
-        return x
-    
 
 class EncoderLayer(tf.keras.layers.Layer):
     def __init__(self, num_heads, d_model, dff, partition_config=None, rate=0.1, name=None):

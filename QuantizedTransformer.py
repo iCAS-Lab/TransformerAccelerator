@@ -14,10 +14,11 @@ from tensorflow.python.keras.utils import conv_utils
 from tensorflow.python.ops import nn_ops
 import functools
 import math
-import json
 
-LastValueQuantizer = tfmot.quantization.keras.quantizers.LastValueQuantizer
-MovingAverageQuantizer = tfmot.quantization.keras.quantizers.MovingAverageQuantizer
+import json
+import RangeBasedLayerNormalization
+import TransformerModel
+import ConvertModel
 
 DEFAULT_PARTITION_CONFIG = {
     "intermediate_partitions":1,
@@ -25,6 +26,48 @@ DEFAULT_PARTITION_CONFIG = {
     "embedding_partitions":1,
     "use_conv":False
 }
+
+ACTIVATION_BITS = 8
+
+DEFAULT_Q_PARAMS = {
+    "symmetric":True,
+    "per_axis":False,
+    "n_bits":8,
+}
+
+def DequantizedModel(model, config):
+    model.save("temp.h5", include_optimizer=False) 
+    model = tf.keras.models.load_model('temp.h5', custom_objects={
+        'ScaledDotProduct':ScaledDotProduct,
+        'MultiHeadedAttention':MultiHeadedAttention,
+        'ConfigurableDense':ConfigurableDense,
+        'PartitionLayer':PartitionLayer,
+        'DynamicLayerNormalization':DynamicLayerNormalization,
+        'PartitionEmbedding':PartitionEmbedding,
+        'BertEmbedding':BertEmbedding,
+        'BERT':BERT,
+        'BertEncoder':BertEncoder})
+    return ConvertModel.clone_from_archtype(model, config, archtype=TransformerModel)
+
+def QuantizationAwareModel(model):
+    # sneaky layer overloading
+    # cloning functional models is a headache
+    # by saving the model and reloading we can
+    #   1) clone the model
+    #   2) force the model to use the quantized version of the layers upon reloading
+    model.save("temp.h5", include_optimizer=False) 
+    model = tf.keras.models.load_model('temp.h5', custom_objects={
+        'ScaledDotProduct':ScaledDotProduct,
+        'MultiHeadedAttention':MultiHeadedAttention,
+        'ConfigurableDense':ConfigurableDense,
+        'PartitionLayer':PartitionLayer,
+        'DynamicLayerNormalization':DynamicLayerNormalization,
+        'PartitionEmbedding':PartitionEmbedding,
+        'BertEmbedding':BertEmbedding,
+        'BERT':BERT,
+        'BertEncoder':BertEncoder})
+
+    return model
 
 def deserialize_partition_config(partition_config):
     if partition_config==None:
@@ -163,6 +206,213 @@ class QuantizedEmbedding(tf.keras.layers.Layer):
         output = output
         return output
 
+class MovingAverageQuantizer(tf.keras.layers.Layer):
+    def __init__(self, warmup_steps=200, symmetric=True, n_bits=8, alpha=0.999, warmup_alpha=0.9, name=None, trainable=False, **kwargs):
+        super(MovingAverageQuantizer, self).__init__(**kwargs)
+        self.warmup_steps=warmup_steps
+        self.symmetric = symmetric
+        self.n_bits = n_bits
+        self.max_bits = 2**n_bits
+        self.q_min = -2**(n_bits-1)
+        self.q_max = 2**(n_bits-1) - 1
+        self.alpha = alpha
+        self.beta = 1-self.alpha
+        self.warmup_alpha = warmup_alpha
+        self.warmup_beta = 1-self.warmup_alpha
+
+    def build(self, input_shape):
+        self.max_weight = self.add_weight(self.name + '_max',
+            initializer=tf.keras.initializers.Constant(0.0),
+            trainable=False)
+
+        self.min_weight = self.add_weight(self.name + '_min',
+            initializer=tf.keras.initializers.Constant(0.0),
+            trainable=False)
+        
+        self.steps = self.add_weight(self.name + '_steps',
+            initializer=tf.keras.initializers.Constant(0.0),
+            trainable=False)
+
+    def get_config(self):
+        config = {"name":self.name, 'warmup_steps':self.warmup_steps}
+
+    def call(self, x):
+        if self.steps<=0:
+            self.min_weight.assign(tf.math.reduce_min(x))
+            self.max_weight.assign(tf.math.reduce_max(x))
+        elif self.steps < self.warmup_steps:
+            self.min_weight.assign(self.warmup_alpha*tf.math.reduce_min(x) + self.warmup_beta*self.min_weight)
+            self.max_weight.assign(self.warmup_alpha*tf.math.reduce_max(x) + self.warmup_beta*self.max_weight)
+        else:
+            self.min_weight.assign(self.alpha*tf.math.reduce_min(x) + self.beta*self.min_weight)
+            self.max_weight.assign(self.alpha*tf.math.reduce_max(x) + self.beta*self.max_weight)
+
+        if self.steps >= self.warmup_steps:
+            if self.symmetric:
+                s = (2*tf.math.maximum(tf.math.abs(self.min_weight), tf.math.abs(self.max_weight)))/(self.max_bits)
+                x = tf.math.round(x/s)*s
+            else:
+                s = (self.max_weight - self.min_weight)/(self.q_max - self.q_min)
+                x = tf.math.round(x/s)*s
+        
+        self.steps.assign(self.steps+1)
+        return x
+
+class MinMaxQuantizer(tf.keras.layers.Layer):
+    def __init__(self, warmup_steps=200, symmetric=True, n_bits=8, name=None, trainable=False, per_axis=False, **kwargs):
+        super(MinMaxQuantizer, self).__init__(**kwargs)
+        self.warmup_steps=warmup_steps
+        self.symmetric = symmetric
+        self.n_bits = n_bits
+        self.max_bits = 2**n_bits
+        self.per_axis=per_axis
+        self.q_min = -2**(n_bits-1)
+        self.q_max = 2**(n_bits-1) - 1
+
+        self.mins = []
+        self.maxs = []
+        self.outter_dim = None
+
+    def build(self, input_shape):
+        self.max_weight = self.add_weight(self.name + '_max',
+            initializer=tf.keras.initializers.Constant(0.0),
+            trainable=False)
+
+        self.min_weight = self.add_weight(self.name + '_min',
+            initializer=tf.keras.initializers.Constant(0.0),
+            trainable=False)
+      
+        self.steps = self.add_weight(self.name + '_steps',
+            initializer=tf.keras.initializers.Constant(0.0),
+            trainable=False)
+
+    def get_config(self):
+        config = {"name":self.name, 'warmup_steps':self.warmup_steps}
+
+    def call(self, x):
+        self.steps.assign(self.steps+1)
+        self.min_weight.assign(tf.math.minimum(tf.math.reduce_min(x), self.min_weight))
+        self.max_weight.assign(tf.math.maximum(tf.math.reduce_max(x), self.max_weight))
+        if self.steps >= self.warmup_steps:
+            if self.symmetric:
+                s = (2*tf.math.maximum(tf.math.abs(self.min_weight), tf.math.abs(self.max_weight)))/(self.max_bits)
+                x = tf.math.round(x/s)*s
+            else:
+                s = (self.max_weight - self.min_weight)/(self.q_max - self.q_min)
+                zp = tf.math.round(0/s)*s
+                x = tf.math.round(x/s)*s - zp
+        return x
+
+
+class LearnedQuantizer(tf.keras.layers.Layer):
+    def __init__(self, warmup_steps=200, symmetric=True, n_bits=8, name=None, trainable=False, per_axis=False, **kwargs):
+        super(LearnedQuantizer, self).__init__(**kwargs)
+        self.warmup_steps=warmup_steps
+        self.symmetric = symmetric
+        self.n_bits = n_bits
+        self.max_bits = 2**n_bits
+        self.per_axis=per_axis
+        self.q_min = -2**(n_bits-1)
+        self.q_max = 2**(n_bits-1) - 1
+
+        self.mins = []
+        self.maxs = []
+        self.outter_dim = None
+
+    def build(self, input_shape):
+        self.max_weight = self.add_weight(self.name + '_max',
+            initializer=tf.keras.initializers.Constant(1.0),
+            trainable=True)
+
+        self.min_weight = self.add_weight(self.name + '_min',
+            initializer=tf.keras.initializers.Constant(-1.0),
+            trainable=True)
+      
+        self.steps = self.add_weight(self.name + '_steps',
+            initializer=tf.keras.initializers.Constant(0.0),
+            trainable=False)
+
+    def get_config(self):
+        config = {"name":self.name, 'warmup_steps':self.warmup_steps}
+
+    def call(self, x):
+        self.steps.assign(self.steps+1)
+        if self.steps >= self.warmup_steps:
+            x = tf.math.minimum(x, self.max_weight)
+            x = tf.math.maximum(x, self.min_weight)
+            if self.symmetric:
+                s = (2*tf.math.maximum(tf.math.abs(self.min_weight), tf.math.abs(self.max_weight)))/(self.max_bits)
+                x = tf.math.round(x/s)*s
+            else:
+                s = (self.max_weight - self.min_weight)/(self.q_max - self.q_min)
+                zp = tf.math.round(0/s)*s
+                x = tf.math.round(x/s)*s - zp
+        else:
+            self.min_weight.assign(tf.math.minimum(tf.math.reduce_min(x), self.min_weight))
+            self.max_weight.assign(tf.math.maximum(tf.math.reduce_max(x), self.max_weight))
+        return x
+
+class AlternatingMinMaxQuantizer(tf.keras.layers.Layer):
+    def __init__(self, warmup_steps=200, alternation_steps=400, symmetric=True, n_bits=8, name=None, trainable=False, per_axis=False, **kwargs):
+        super(AlternatingMinMaxQuantizer, self).__init__(**kwargs)
+        self.warmup_steps=warmup_steps
+        self.symmetric = symmetric
+        self.n_bits = n_bits
+        self.max_bits = 2**n_bits
+        self.per_axis=per_axis
+        self.q_min = -2**(n_bits-1)
+        self.q_max = 2**(n_bits-1) - 1
+        self.alternation_steps=alternation_steps
+
+        self.mins = []
+        self.maxs = []
+        self.outter_dim = None
+
+    def build(self, input_shape):
+        self.max_weight = self.add_weight(self.name + '_max',
+            initializer=tf.keras.initializers.Constant(0.0),
+            trainable=False)
+
+        self.min_weight = self.add_weight(self.name + '_min',
+            initializer=tf.keras.initializers.Constant(0.0),
+            trainable=False)
+
+        self.max_weight_alt = self.add_weight(self.name + '_max_alt',
+            initializer=tf.keras.initializers.Constant(0.0),
+            trainable=False)
+
+        self.min_weight_alt = self.add_weight(self.name + '_min_alt',
+            initializer=tf.keras.initializers.Constant(0.0),
+            trainable=False)
+      
+        self.steps = self.add_weight(self.name + '_steps',
+            initializer=tf.keras.initializers.Constant(0.0),
+            trainable=False)
+
+    def get_config(self):
+        config = {"name":self.name, 'warmup_steps':self.warmup_steps}
+
+    def call(self, x):
+        self.steps.assign(self.steps+1)
+        self.min_weight.assign(tf.math.minimum(tf.math.reduce_min(x), self.min_weight))
+        self.max_weight.assign(tf.math.maximum(tf.math.reduce_max(x), self.max_weight))
+        self.min_weight_alt.assign(tf.math.minimum(tf.math.reduce_min(x), self.min_weight_alt))
+        self.max_weight_alt.assign(tf.math.maximum(tf.math.reduce_max(x), self.max_weight_alt))
+        if self.steps >= self.warmup_steps:
+            if self.symmetric:
+                s = (2*tf.math.maximum(tf.math.abs(self.min_weight), tf.math.abs(self.max_weight)))/(self.max_bits)
+                x = tf.math.round(x/s)*s
+            else:
+                s = (self.max_weight - self.min_weight)/(self.q_max - self.q_min)
+                zp = tf.math.round(0/s)*s
+                x = tf.math.round(x/s)*s - zp
+        if (self.steps % self.alternation_steps)==0:
+            self.min_weight.assign(self.max_weight_alt)
+            self.max_weight.assign(self.min_weight_alt)
+            self.min_weight_alt.assign(0.0)
+            self.max_weight_alt.assign(0.0)
+        return x
+
 class LinearLayer(tf.keras.layers.Layer):
     def __init__(self, name=None, trainable=True, **kwargs):
         super(LinearLayer, self).__init__(**kwargs)
@@ -290,6 +540,14 @@ class ScaledDotProduct(tf.keras.layers.Layer):
         self.dense_k = ConfigurableDense(self.d_model, inp_size=self.inp_size, name="key", use_conv=use_conv)
         self.dense_v = ConfigurableDense(self.d_model, inp_size=self.inp_size, name="value", use_conv=use_conv)
 
+        self.quant_qk = MovingAverageQuantizer(symmetric=False)
+        self.quant_softmax = MovingAverageQuantizer(symmetric=True)
+        self.quant_output = MovingAverageQuantizer(symmetric=False)
+
+        self.quant_dense_q = MovingAverageQuantizer(symmetric=False)
+        self.quant_dense_k = MovingAverageQuantizer(symmetric=False)
+        self.quant_dense_v = MovingAverageQuantizer(symmetric=False)
+
     def compute_output_shape(self, input_shape):
         return (None, input_shape[1], self.inp_size)
 
@@ -320,13 +578,23 @@ class ScaledDotProduct(tf.keras.layers.Layer):
         k = self.dense_k(k)
         v = self.dense_v(v)
 
+        q = self.quant_dense_q(q)
+        k = self.quant_dense_k(k)
+        v = self.quant_dense_v(v)
+
         matmul_qk = tf.matmul(q, k, transpose_b=True)
+        matmul_qk = self.quant_qk(matmul_qk) #quant
+
         dk = tf.cast(tf.shape(k)[-1], tf.float32)
         scaled_attention_logits = matmul_qk / tf.math.sqrt(dk)
         if not mask is None:
             scaled_attention_logits += mask
+
         attention_weights = self.softmax(scaled_attention_logits, axis=-1)
+        attention_weights = self.quant_softmax(attention_weights) #quant
+
         output = tf.matmul(attention_weights, v)
+        output = self.quant_output(output) #quant
         return  output
 
 class MultiHeadedAttention(tf.keras.layers.Layer):
@@ -366,7 +634,6 @@ class MultiHeadedAttention(tf.keras.layers.Layer):
         x = self.act_out(tf.matmul(x, self.kernel) + self.bias)
         return x
 
-
 class BERTMultiHeadedAttention(tf.keras.layers.Layer):
     def __init__(self, num_heads, d_model, rate=0.1, partition_config=None, activation='gelu', name=None):
         super(BERTMultiHeadedAttention, self).__init__(name=name)
@@ -385,6 +652,9 @@ class BERTMultiHeadedAttention(tf.keras.layers.Layer):
         self.d_model = d_model
         self.dropout = tf.keras.layers.Dropout(rate)
         self.mha_ffn = ConfigurableDense(self.d_model, inp_size=self.d_model, use_conv=self.use_conv, name=self.name + "attention_output")
+
+        self.quant_mha_out = MovingAverageQuantizer(symmetric=False)
+        self.quant_out = MovingAverageQuantizer(symmetric=False)
 
     def build(self, input_shape):
         pass
@@ -418,13 +688,53 @@ class BERTMultiHeadedAttention(tf.keras.layers.Layer):
         x = attention_outputs[0]
         if self.num_heads>1:
             x = tf.keras.layers.concatenate(attention_outputs)
+        x = self.quant_mha_out(x)
         x = self.mha_ffn(x)
         x = self.dropout(x, training=training)
+        x = self.quant_out(x)
         return x
 
+
+
+class QuantKernelWrapper():
+    def __init__(self, layer, q_params=None):
+        if q_params==None:
+            q_params = DEFAULT_Q_PARAMS
+        self.layer = layer
+        self.q_params = DEFAULT_Q_PARAMS
+        self.quantized_kernel = None
+        self.dequant_kernel = None
+        self.qmin = 1e10
+        self.qmax = -1e10
+        self.n_bits = q_params["n_bits"]
+        self.max_bits = 2**self.n_bits
+
+    @tf.function
+    def quantize(self):
+        layer = self.layer
+        self.dequant_kernel = tf.identity(layer.kernel)
+        kernel = layer.kernel
+        qmin = min(self.qmin, tf.math.reduce_min(kernel))
+        qmax = max(self.qmax, tf.math.reduce_max(kernel))
+        s = (2*max(abs(qmin), abs(qmax)))/(self.max_bits)
+        self.qmin = qmin
+        self.qmax = qmax
+        kernel.assign(tf.math.round(kernel/s)*s+qmin)
+
+    @tf.function
+    def dequantize(self):
+        kernel.assign(self.dequant_kernel)
+
+
+
+
+        
+
 class ConfigurableDense(tf.keras.layers.Layer):
-    def __init__(self, size, use_conv=False, inp_size=None, use_bias=True, activation=None, name=None):
+    def __init__(self, size, use_conv=False, inp_size=None, use_bias=True, activation=None, name=None, q_params=None):
         super(ConfigurableDense, self).__init__(name=name)
+        if q_params==None:
+            q_params = DEFAULT_Q_PARAMS
         self.size = size
         self.use_conv = use_conv
         self.use_bias = use_bias
@@ -433,6 +743,26 @@ class ConfigurableDense(tf.keras.layers.Layer):
         self.act_out = activations.get(activation)
         if activation=="gelu":
             self.act_out=ApproxGelu()
+        self.q_params = DEFAULT_Q_PARAMS
+
+        self.qmin = 1e10
+        self.qmax = -1e10
+        self.n_bits = q_params["n_bits"]
+        self.max_bits = 2**self.n_bits
+        #self.act_quant = MovingAverageQuantizer(symmetric=False)
+
+    @tf.function
+    def quantize(self):
+        qmin = tf.math.minimum(self.qmin, tf.math.reduce_min(self.kernel))
+        qmax = tf.math.maximum(self.qmax, tf.math.reduce_max(self.kernel))
+        s = (2*tf.math.maximum(tf.math.abs(qmin), tf.math.abs(qmax)))/(self.max_bits)
+        self.qmin = qmin
+        self.qmax = qmax
+        self.kernel.assign(tf.math.round(self.kernel/s)*s)
+
+    @tf.function
+    def dequantize(self):
+        pass
 
     def get_config(self):
         return {
@@ -452,6 +782,7 @@ class ConfigurableDense(tf.keras.layers.Layer):
             self.kernel = self.add_weight("kernel",shape=[self.inp_size,self.size],
                     initializer='random_normal',
                     trainable=True)
+
         else:
             kernel_shape = (1,inp_size,self.size)
             self.kernel = self.add_weight(
@@ -487,8 +818,15 @@ class ConfigurableDense(tf.keras.layers.Layer):
             return
         self.act_out = activation
 
+    #def call(self, x):
+        #self.quantize()
+        #self._call(x)
+        #self.dequantize()
+
     
     def call(self, x):
+        self.quantize()
+
         if not self.use_conv:
             out = tf.matmul(x, self.kernel)
         else:
@@ -499,6 +837,7 @@ class ConfigurableDense(tf.keras.layers.Layer):
             out += self.bias
         if self.activation is not None:
             out = self.act_out(out)
+        self.dequantize()
         return out
 
 
@@ -566,23 +905,34 @@ class PartitionLayer(tf.keras.layers.Layer):
 
 
 class PartitionEmbedding(tf.keras.layers.Layer):
-  def __init__(self, vocab_Size, emb_size, n_partitions=1, name=None):
-      super(PartitionEmbedding, self).__init__(name=name)
-      self.vocab_size = vocab_Size
-      self.emb_size = emb_size
-      self.n_partitions = n_partitions
-      self.partition_size = int(self.emb_size/n_partitions)
-      assert self.emb_size % n_partitions == 0
-      self.embeddings = [tf.keras.layers.Embedding(vocab_Size, self.partition_size, name="partition" + str(i)) for i in range(n_partitions)]
+    def __init__(self, vocab_Size, emb_size, n_partitions=1, name=None):
+        super(PartitionEmbedding, self).__init__(name=name)
+        self.vocab_size = vocab_Size
+        self.emb_size = emb_size
+        self.n_partitions = n_partitions
+        self.partition_size = int(self.emb_size/n_partitions)
 
-  def call(self, x):
-      outputs = []
-      for embedding in self.embeddings:
-          outputs.append(embedding(x))
-      x = outputs[0]
-      if self.n_partitions>1:
-          x = tf.keras.layers.concatenate(outputs)
-      return x
+        assert self.emb_size % n_partitions == 0
+        self.embeddings = [tf.keras.layers.Embedding(vocab_Size, self.partition_size, name="partition" + str(i)) for i in range(n_partitions)]
+
+        self.quants = [MovingAverageQuantizer() for i in range(n_partitions)]
+
+
+    def build(self, inp_shape):
+        for emb in self.embeddings:
+            emb.build(inp_shape)
+
+
+    def call(self, x):
+        outputs = []
+        for i, embedding in enumerate(self.embeddings):
+            quantizer = self.quants[i]
+            embedding.embeddings.assign(quantizer(embedding.embeddings))
+            outputs.append(embedding(x))
+        x = outputs[0]
+        if self.n_partitions>1:
+            x = tf.keras.layers.concatenate(outputs)
+        return x
 
 
 class BertEmbedding(tf.keras.layers.Layer):
@@ -689,6 +1039,11 @@ class BERT(tf.keras.layers.Layer):
     def build(self, input_shape):
         pass
 
+    def on_epoch(self):
+        self.embedding.norm.on_epoch()
+        for i, encoder in enumerate(self.enc_layers):
+            encoder.on_epoch()
+
     def call(self, x, seg, mask, training=True):
         mask = tf.expand_dims(mask, axis=1)
         mask = mask*1e-9
@@ -728,6 +1083,11 @@ class BertEncoder(tf.keras.layers.Layer):
         self.dff = ConfigurableDense(self.intermediate_size, inp_size=self.d_model, use_conv=partition_config["use_conv"], activation=activation, name="intermediate")
         self.out_ffn = ConfigurableDense(self.d_model, inp_size=self.intermediate_size, use_conv=partition_config["use_conv"], name="out")
 
+        self.quant_dff = MovingAverageQuantizer(symmetric=False)
+        self.quant_out_ffn = MovingAverageQuantizer(symmetric=False)
+
+        self.quant_out_norm1 = MovingAverageQuantizer(symmetric=False)
+        self.quant_out_norm2 = MovingAverageQuantizer(symmetric=False)
 
         self.intermediate_partitions = 1
         self.use_partitions=True
@@ -736,6 +1096,9 @@ class BertEncoder(tf.keras.layers.Layer):
         if activation == 'gelu':
             self.activation1 = approx_gelu
 
+    def on_epoch(self):
+        self.layernorm1.on_epoch()
+        self.layernorm2.on_epoch()
 
     def get_config(self):
         return {
@@ -769,12 +1132,18 @@ class BertEncoder(tf.keras.layers.Layer):
         attn_output = self.mha(x, x, x, mask)
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(x + attn_output)
-        #out1 = attn_output
+        #out1 = self.quant_out_norm1(out1)
+
         ffn_output1 = self.dff(out1)
+        ffn_output1 = self.quant_dff(ffn_output1)
+
         ffn_output2 = self.out_ffn(ffn_output1)
+        ffn_output2 = self.quant_out_ffn(ffn_output2)
+
         ffn_output3 = self.dropout2(ffn_output2, training=training)
         #out2 = ffn_output3
         out2 = self.layernorm2(out1 + ffn_output3)
+        #out2 = self.quant_out_norm1(out2)
         return out2
 
 class DynamicLayerNormalization(tf.keras.layers.Layer):
@@ -788,6 +1157,27 @@ class DynamicLayerNormalization(tf.keras.layers.Layer):
     def __init__(self, epsilon=1e-6, name=None):
         super(DynamicLayerNormalization, self).__init__(name=name)
         self.epsilon = epsilon
+        self.outter_dim = None
+        self.middle_dim = None
+        self.alpha = 0
+        self.epochs = 0
+        self.transition_epoch = 5
+        self.dropout = tf.keras.layers.Dropout(0.1)
+
+        # quantization params
+        self.n_bits = ACTIVATION_BITS
+        self.max_bits = 2**self.n_bits
+        self.q_alpha = 0.9
+        self.q_beta = 1-self.q_alpha
+        self.q_warmup = 200
+
+        self.inp_quant = MinMaxQuantizer(symmetric=False)
+        self.mean_quant = LearnedQuantizer(symmetric=False)
+        self.var_quant = LearnedQuantizer(symmetric=False)
+        self.y_quant = MinMaxQuantizer(symmetric=True)
+        self.rsqrt_quant = MovingAverageQuantizer(symmetric=False, warmup_steps=1000, alpha=0.999)
+        self.wt_quant = MovingAverageQuantizer(symmetric=True)
+        self.out_quant = MovingAverageQuantizer(symmetric=False, warmup_steps=1000, alpha=0.999)
 
     def get_config(self):
         return {
@@ -798,6 +1188,8 @@ class DynamicLayerNormalization(tf.keras.layers.Layer):
     def build(self, input_shape):
         #gamma
         input_shape = tf.TensorShape(input_shape)
+        self.middle_dim = input_shape[-2]
+        self.outter_dim = input_shape[-1]
         self.weight = self.add_weight("gamma",shape=[input_shape[-1]],
                 initializer='random_normal',
                 trainable=True)
@@ -807,12 +1199,51 @@ class DynamicLayerNormalization(tf.keras.layers.Layer):
                 initializer='random_normal',
                 trainable=True)
 
+
+    def on_epoch(self):
+        self.epochs+=1
+        #x = self.epochs
+        #self.alpha = 1.37*(1/(1+math.exp(0.25*x-1)))
+        #if self.alpha <= 0.03:
+        #    self.alpha = 0
+        self.alpha = 1-(min(self.transition_epoch,self.epochs)/self.transition_epoch)
+        #self.alpha = 0
+
     def call(self, x):
-        mean, var = tf.nn.moments(x, -1, keepdims=True)
+        """
+        #x = y*tf.math.rsqrt(self.epsilon + var)
         y = x - mean
-        x = y*tf.math.rsqrt(self.epsilon + var)
+        xmin = tf.math.reduce_min(y, axis=-2, keepdims=True)
+        xmax = tf.math.reduce_max(y, axis=-2, keepdims=True)
+
+        scale_adjustment = 1 / (math.sqrt(2*np.log(self.outter_dim)))
+        x = (y)/((xmax-xmin)*scale_adjustment)
+        x2 = y*tf.math.rsqrt(self.epsilon + var)
+
+        alpha = self.alpha
+        if alpha>1:
+            alpha=1
+        beta = (1-self.alpha)
+        #x = x2*alpha + x*beta
+        #x = x * self.weight + self.bias
+        """
+        #x = self.inp_quant(x)
+        mean, var = tf.nn.moments(x, -1, keepdims=True)
+        mean = self.mean_quant(mean)
+        var = self.var_quant(var)
+
+        y = x - mean
+        #y = self.y_quant(y)
+        #y = self.y_quant(y)
+
+        x=y*tf.math.rsqrt(self.epsilon + var)
+
+        #self.weight.assign(self.wt_quant(self.weight))
+
         x = x * self.weight + self.bias
+        #x = self.out_quant(x)
         return x
+    
     
 
 class EncoderLayer(tf.keras.layers.Layer):

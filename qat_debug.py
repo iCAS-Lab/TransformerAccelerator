@@ -6,10 +6,12 @@ import tensorflow_models as tfm
 import tensorflow_datasets as tfds
 
 import TransformerModel
+import QuantizedTransformer
+import RangeBasedLayerNormalization
 
 import ConvertModel
 
-os.environ["CUDA_VISIBLE_DEVICES"]="0"
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
 partiton_config = {
     "intermediate_partitions":1,
@@ -20,22 +22,23 @@ partiton_config = {
 
 model_name = "uncased_L-8_H-512_A-8"
 model_dir = "models/" + model_name
-epochs = 5
+epochs = 6
 
+bert_classifier = tf.keras.models.load_model('trained.h5', custom_objects={
+    'ScaledDotProduct':QuantizedTransformer.ScaledDotProduct,
+    'MultiHeadedAttention':QuantizedTransformer.MultiHeadedAttention,
+    'ConfigurableDense':QuantizedTransformer.ConfigurableDense,
+    'PartitionLayer':QuantizedTransformer.PartitionLayer,
+    'ConfigurableDense':QuantizedTransformer.ConfigurableDense,
+    'PartitionEmbedding':QuantizedTransformer.PartitionEmbedding,
+    'BertEmbedding':QuantizedTransformer.BertEmbedding,
+    'BERT':QuantizedTransformer.BERT,
+    'BertEncoder':QuantizedTransformer.BertEncoder})
+bert_classifier = ConvertModel.clone_from_archtype(bert_classifier, model_dir + "/bert_config.json", archtype=RangeBasedLayerNormalization)
 #strategy = tf.distribute.MirroredStrategy()#devices=["/gpu:0", "/gpu:1", "/gpu:2"])
 strategy = tf.distribute.get_strategy()
 BATCH_SIZE_PER_REPLICA = 16
 batch_size = BATCH_SIZE_PER_REPLICA * strategy.num_replicas_in_sync
-
-def fetchRawModel(batch_size=None):
-    #bert_encoder = ConvertModel.from_config(model_dir + "/bert_config.json", partition_config = partiton_config)
-    bert_encoder = ConvertModel.from_tf1_checkpoint(model_dir, partition_config = partiton_config)
-    bert_classifier = ConvertModel.BERT_Classifier(bert_encoder, 2, use_conv=partiton_config["use_conv"])
-    #bert_classifier = bert_encoder
-    return bert_classifier
-
-bert_classifier = fetchRawModel()
-bert_classifier.summary()
 
 glue, info = tfds.load('glue/mrpc',
                        with_info=True,
@@ -102,49 +105,9 @@ bert_classifier.compile(
     loss=loss,
     metrics=metrics)
 
-bert_classifier.evaluate(glue_validation)
-
-bert_classifier.fit(
-      glue_train,
-      validation_data=(glue_validation),
-      batch_size=batch_size,
-      epochs=epochs)
-
-print("before")
-bert_classifier.evaluate(glue_validation)
-
-bert_classifier.save(model_name + ".h5", include_optimizer=False)
-"""
-bert_classifier = tf.keras.models.load_model('bert_tiny.h5', custom_objects={
-    'ScaledDotProduct':TransformerModel.ScaledDotProduct,
-    'MultiHeadedAttention':TransformerModel.MultiHeadedAttention,
-    'ConfigurableDense':TransformerModel.ConfigurableDense,
-    'PartitionLayer':TransformerModel.PartitionLayer,
-    'PartitionEmbedding':TransformerModel.PartitionEmbedding,
-    'BertEmbedding':TransformerModel.BertEmbedding,
-    'BERT':TransformerModel.BERT,
-    'BertEncoder':TransformerModel.BertEncoder})
-
-bert_classifier.compile(
-    optimizer=optimizer,
-    loss=loss,
-    metrics=metrics)
-print("after")
-bert_classifier.evaluate(glue_validation)
-quant_aware_model = TransformerQuantization.QuantizeTransformer(bert_classifier)
-tf.keras.backend.clear_session()
-
-quant_aware_model.compile(loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
-              optimizer='adam',
-              metrics=tf.metrics.BinaryAccuracy(threshold=0.0))
-quant_aware_model.summary()
-
-quant_aware_model.fit(
-    glue_train,
-    validation_data=(glue_validation),
-    batch_size=batch_size,
-    epochs=epochs)
-
+quant_aware_model = bert_classifier
+quant_aware_model.evaluate(glue_validation)
+      
 glue, info = tfds.load('glue/mrpc',
                        with_info=True,
                        batch_size=1)
@@ -165,7 +128,7 @@ glue_validation = glue['validation'].map(bert_inputs_processor).prefetch(1)
 glue_test = glue['test'].map(bert_inputs_processor).prefetch(1)
 
 def representative_dataset():
-  for data in glue_train.take(1):
+  for data in glue_train.take(400):
     yield [tf.dtypes.cast(tf.dtypes.cast(data[0]["input_word_ids"], tf.float32), tf.float32),
     tf.dtypes.cast(tf.dtypes.cast(data[0]["input_mask"], tf.float32), tf.float32),
     tf.dtypes.cast(tf.dtypes.cast(data[0]["input_type_ids"], tf.float32), tf.float32)]
@@ -177,8 +140,13 @@ for input_idx in range(len(bert_classifier.input)):
 float_converter = tf.lite.TFLiteConverter.from_keras_model(bert_classifier)
 float_tflite_model = float_converter.convert()
 #open("tflite_models/mrpc_" + model_name + "_fp32.tflite", "wb").write(float_tflite_model)
+#"""
+ptq_converter = tf.lite.TFLiteConverter.from_keras_model(bert_classifier)
+ptq_converter.optimizations = [tf.lite.Optimize.DEFAULT]
+ptq_converter.representative_dataset = representative_dataset
+ptq_converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
 
-converter = tf.lite.TFLiteConverter.from_keras_model(bert_classifier)
+converter = tf.lite.TFLiteConverter.from_keras_model(quant_aware_model)
 converter.optimizations = [tf.lite.Optimize.DEFAULT]
 converter.representative_dataset = representative_dataset
 converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
@@ -186,10 +154,18 @@ converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
 debugger = tf.lite.experimental.QuantizationDebugger(
     converter=converter, debug_dataset=representative_dataset)
 debugger.run()
-RESULTS_FILE = 'debugger_results/uncased_L-2_H-128_A-2_debug.csv'
+RESULTS_FILE = 'debugger_results/QAT' + model_name + '.csv'
 with open(RESULTS_FILE, 'w') as f:
   debugger.layer_statistics_dump(f)
 quantized_tflite_model = debugger.get_nondebug_quantized_model()
+
+debugger = tf.lite.experimental.QuantizationDebugger(
+    converter=ptq_converter, debug_dataset=representative_dataset)
+debugger.run()
+RESULTS_FILE = 'debugger_results/PTQ' + model_name + '.csv'
+with open(RESULTS_FILE, 'w') as f:
+  debugger.layer_statistics_dump(f)
+ptq_quantized_tflite_model = debugger.get_nondebug_quantized_model()
 
 _, quant_file = tempfile.mkstemp('.tflite')
 _, float_file = tempfile.mkstemp('.tflite')
@@ -202,6 +178,75 @@ with open(quant_file, 'wb') as f:
 print("Float model in Mb:", os.path.getsize(float_file) / float(2**20))
 print("Quantized model in Mb:", os.path.getsize(quant_file) / float(2**20))
 
-open("tflite_models/mrpc_" + model_name + "_int8.tflite", "wb").write(quantized_tflite_model)
+open("tflite_models/mrpc_" + model_name + "_QAT_int8.tflite", "wb").write(quantized_tflite_model)
+open("tflite_models/mrpc_" + model_name + "_PTQ_int8.tflite", "wb").write(ptq_quantized_tflite_model)
 open("tflite_models/mrpc_" + model_name + "_fp32.tflite", "wb").write(float_tflite_model)
+
+
+import numpy as np
+
+test_samples = 400
+
+val_x = np.loadtxt("data/mrpc_val_x.txt")
+val_x = np.reshape(val_x, (val_x.shape[0], 3, 128))
+val_y = np.loadtxt("data/mrpc_val_y.txt")
+print("Calculating model accuracy for validation subset")
+
+def evaluate_model(interpreter, x_test, y_test):
+  output_index = interpreter.get_output_details()[0]["index"]
+
+  word_ids_index = interpreter.get_input_details()[0]["index"]
+  input_type_ids_index = interpreter.get_input_details()[1]["index"]
+  input_mask_index = interpreter.get_input_details()[2]["index"]
+
+  #print(interpreter.get_input_details()[0])
+  #print(interpreter.get_input_details()[1])
+  #print(interpreter.get_input_details()[2])
+  # Run predictions on every image in the "test" dataset.
+  acc = 0
+  samples = 0
+  for i, x_sample in enumerate(val_x[:test_samples]):
+    # Pre-processing: add batch dimension and convert to float32 to match with
+    # the model's input data format.
+    word_ids = np.reshape(x_sample[0], (1,x_sample.shape[1])).astype(np.float32)
+    mask = np.reshape(x_sample[1], (1,x_sample.shape[1])).astype(np.float32)
+    type_ids = np.reshape(x_sample[2], (1,x_sample.shape[1])).astype(np.float32)
+
+    #print("WORDS", word_ids)
+    #print("MASK", mask)
+    #print("TYPE_IDS",type_ids)
+
+    interpreter.set_tensor(word_ids_index, word_ids)
+    interpreter.set_tensor(input_mask_index, mask)
+    interpreter.set_tensor(input_type_ids_index, type_ids)
+
+    # Run inference.
+    interpreter.invoke()
+
+    out_1 = interpreter.get_tensor(output_index)
+    #print(out_1)
+    out_class = int(np.argmax(out_1))
+    if out_class == int(val_y[i]):
+      acc+=1
+    samples+=1
+    # Post-processing: remove batch dimension and find the digit with highest
+    # probability.
+    #output = interpreter.tensor(output_index)
+  return acc / float(samples)
+
+interpreter = tf.lite.Interpreter("tflite_models/mrpc_" + model_name + "_QAT_int8.tflite")
+interpreter.allocate_tensors()
+QATint8acc = evaluate_model(interpreter, val_x, val_y)
+
+interpreter = tf.lite.Interpreter("tflite_models/mrpc_" + model_name + "_PTQ_int8.tflite")
+interpreter.allocate_tensors()
+PTQint8acc = evaluate_model(interpreter, val_x, val_y)
+
+interpreter = tf.lite.Interpreter("tflite_models/mrpc_" + model_name + "_fp32.tflite")
+interpreter.allocate_tensors()
+fp32acc = evaluate_model(interpreter, val_x, val_y)
+
+print("8-bit QAT Acc:", QATint8acc)
+print("8-bit PTQ Acc:", PTQint8acc)
+print("32-bit FP Acc:", fp32acc)
 #"""

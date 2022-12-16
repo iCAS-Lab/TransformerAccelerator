@@ -2,7 +2,7 @@ import tensorflow as tf
 
 
 # Load TFLite model and allocate tensors.
-interpreter = tf.lite.Interpreter(model_path="/home/user/Documents/TransformerAccelerator/detector.tflite")
+interpreter = tf.lite.Interpreter(model_path="/home/user/Documents/TransformerAccelerator/tflite_models/mrpc_uncased_L-8_H-512_A-8qat_sdp-layernorm_fp32.tflite")
 interpreter.allocate_tensors()
 
 # Get input and output tensors.
@@ -14,11 +14,6 @@ output_details = interpreter.get_output_details()
 all_layers_details = interpreter.get_tensor_details() 
 
 for layer in all_layers_details:
-    if layer["name"]=="class_net/class-predict/BiasAdd;class_net/class-predict/separable_conv2d_4;class_net/class-predict/separable_conv2d;class_net/class-predict/bias":
-        print()
-        print("*"*20)
-        print(layer["name"], layer["shape"])
-        print("*"*20)
-        print()
-    else:
-        print(layer["name"], layer["shape"])
+    if "partition0" in layer["name"] and not "norm" in layer["name"]:
+        print(layer)
+        #print(layer["name"], layer["shape"], layer["quantization"])

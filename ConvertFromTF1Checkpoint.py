@@ -154,19 +154,29 @@ def injectMHA(fromModel, toModel, num_heads, layer=0, n_partitions=1):
 
     n1,intermediate_kernel = getWeightByName(fromModel, "layer_" + str(layer) + "/intermediate/dense/kernel")
     n2,intermediate_bias = getWeightByName(fromModel, "layer_" + str(layer) + "/intermediate/dense/bias")
-    partition_size = int(intermediate_kernel.shape[-1] / n_partitions)
-    for i in range(n_partitions):
-        temp_intermediate = intermediate_kernel[:,i*partition_size:(i+1)*partition_size]
-        temp_intermediate_bias = intermediate_bias[i*partition_size:(i+1)*partition_size]
-        setWeightByName(toModel, "layer_" + str(layer) + "/intermediate/partition_out" + str(i) + "/kernel", temp_intermediate,n1)
-        setWeightByName(toModel, "layer_" + str(layer) + "/intermediate/partition_out" + str(i) + "/bias", temp_intermediate_bias,n2)
+    try:
+        partition_size = int(intermediate_kernel.shape[-1] / n_partitions)
+        for i in range(n_partitions):
+            temp_intermediate = intermediate_kernel[:,i*partition_size:(i+1)*partition_size]
+            temp_intermediate_bias = intermediate_bias[i*partition_size:(i+1)*partition_size]
+            setWeightByName(toModel, "layer_" + str(layer) + "/intermediate/partition_out" + str(i) + "/kernel", temp_intermediate,n1)
+            setWeightByName(toModel, "layer_" + str(layer) + "/intermediate/partition_out" + str(i) + "/bias", temp_intermediate_bias,n2)
+    except:
+        print("Error, no intermediate partition, defualting to dense")
+        setWeightByName(toModel, "layer_" + str(layer) + "/intermediate/kernel", intermediate_kernel,n1)
+        setWeightByName(toModel, "layer_" + str(layer) + "/intermediate/bias", intermediate_bias,n1)
 
     
 
     n1,output_kernel = getWeightByName(fromModel, "layer_" + str(layer) + "/output/dense/kernel")
     n2,output_bias = getWeightByName(fromModel, "layer_" + str(layer) + "/output/dense/bias")
-    setWeightByName(toModel, "/layer_" + str(layer) + "/out/0/kernel:0", output_kernel, n1)
-    setWeightByName(toModel, "/layer_" + str(layer) + "/out/bias:0", output_bias, n2)
+    try:
+        setWeightByName(toModel, "/layer_" + str(layer) + "/out/0/kernel:0", output_kernel, n1)
+        setWeightByName(toModel, "/layer_" + str(layer) + "/out/bias:0", output_bias, n2)
+    except:
+        print("Error, no intermediate out partition, defualting to dense")
+        setWeightByName(toModel, "/layer_" + str(layer) + "/out/kernel", output_kernel, n1)
+        setWeightByName(toModel, "/layer_" + str(layer) + "/out/bias", output_bias, n2)
 
     n1,query_kernel = getWeightByName(fromModel, "layer_" + str(layer) + "/attention/self/query/kernel")
     n2,query_bias = getWeightByName(fromModel, "layer_" + str(layer) + "/attention/self/query/bias")
